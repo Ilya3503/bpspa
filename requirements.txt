@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+pydantic
+pyyaml
+websockets
+
+numpy
+scipy
+matplotlib
+opencv-python
+
+open3d==0.18.0
+pyrealsense2

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Bin-Picking System</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app">
+
+    <aside id="sidebar">
+      <h1>Bin-Picking</h1>
+
+      <div class="state-box">
+        <span class="label">Состояние:</span>
+        <span id="state-value">—</span>
+      </div>
+
+      <div class="buttons">
+        <button id="btn-start" class="primary">START</button>
+        <button id="btn-next">NEXT</button>
+        <button id="btn-reset">RESET</button>
+        <button id="btn-stop" class="danger">STOP</button>
+      </div>
+
+      <section>
+        <h2>CAD модель</h2>
+        <select id="cad-select"></select>
+        <button id="cad-apply">Применить</button>
+      </section>
+
+      <section>
+        <h2>Видео с камеры</h2>
+        <img id="video-feed" alt="нет сигнала">
+      </section>
+
+      <section>
+        <h2>Результат</h2>
+        <div id="result-info">
+          <div>Кластеров: <span id="r-num">—</span></div>
+          <div>Fitness: <span id="r-fit">—</span></div>
+          <div>Pos: <span id="r-pos">—</span></div>
+          <div>Quat: <span id="r-quat">—</span></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Вьювер</h2>
+        <label><input type="checkbox" id="show-cad" checked> Показать CAD после ICP</label>
+        <label>CAD прозрачность <input type="range" id="cad-opacity" min="0" max="1" step="0.05" value="0.9"></label>
+        <select id="ply-select"></select>
+        <button id="ply-load">Открыть PLY</button>
+      </section>
+
+      <section>
+        <h2>Лог</h2>
+        <div id="log"></div>
+      </section>
+    </aside>
+
+    <main id="viewer"></main>
+  </div>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

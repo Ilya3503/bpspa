@@ -1,0 +1,47 @@
+* { box-sizing: border-box; }
+body, html { margin: 0; padding: 0; height: 100%; font-family: system-ui, -apple-system, sans-serif; background: #0e1116; color: #e6e6e6; }
+#app { display: flex; height: 100vh; }
+#sidebar {
+  width: 340px;
+  padding: 16px;
+  background: #161b22;
+  overflow-y: auto;
+  border-right: 1px solid #2a313a;
+}
+#sidebar h1 { font-size: 18px; margin: 0 0 12px; color: #58a6ff; }
+#sidebar h2 { font-size: 13px; margin: 16px 0 6px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+.state-box { padding: 10px; background: #21262d; border-radius: 6px; margin-bottom: 12px; font-size: 14px; }
+.state-box .label { color: #8b949e; margin-right: 8px; }
+#state-value { font-weight: bold; color: #58a6ff; }
+
+.buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
+button {
+  background: #21262d; color: #e6e6e6; border: 1px solid #2a313a;
+  padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+button:hover { background: #2d333b; }
+button.primary { background: #238636; border-color: #2ea043; }
+button.primary:hover { background: #2ea043; }
+button.danger { background: #6e2222; border-color: #8d3232; }
+
+select, input[type=range] { width: 100%; margin: 4px 0; }
+select { background: #21262d; color: #e6e6e6; border: 1px solid #2a313a; padding: 6px; border-radius: 4px; }
+
+label { display: block; font-size: 12px; color: #8b949e; margin: 6px 0; }
+label input { margin-right: 6px; }
+
+#video-feed { width: 100%; border-radius: 4px; background: #000; min-height: 100px; }
+
+#result-info { font-size: 12px; line-height: 1.6; background: #0d1117; padding: 8px; border-radius: 4px; }
+#result-info span { color: #79c0ff; font-family: monospace; }
+
+#log {
+  height: 200px; overflow-y: auto;
+  background: #0d1117; padding: 6px; border-radius: 4px;
+  font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.4;
+}
+#log .l-info { color: #c9d1d9; }
+#log .l-err { color: #f85149; }
+#log .l-ok  { color: #3fb950; }
+
+#viewer { flex: 1; position: relative; background: #0a0d12; }
