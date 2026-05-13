@@ -262,13 +262,32 @@ class Orchestrator:
                   "cad_model": cad_name if cad_model else None})
 
             if cad_model is not None:
-                pose = pl.run_icp(
-                    cluster, cad_model,
-                    voxel_size=icp_cfg["voxel_size"],
-                    max_correspondence_distance=icp_cfg["max_correspondence_distance"],
-                    max_iterations=icp_cfg["max_iterations"],
-                    fitness_threshold=icp_cfg["fitness_threshold"],
-                )
+                ppf_cfg = cfg.get("ppf", {})
+                if ppf_cfg.get("enabled", False):
+                    try:
+                        pose = pl.run_ppf_then_icp(
+                            cluster, cad_model, cad_name,
+                            ppf_cfg=ppf_cfg,
+                            icp_cfg=icp_cfg,
+                        )
+                    except Exception as e:
+                        log.warning(f"PPF failed for cluster {i}: {e}. Fallback to ICP.")
+                        emit({"event": "ppf_error", "cluster_id": i, "error": str(e)})
+                        pose = pl.run_icp(
+                            cluster, cad_model,
+                            voxel_size=icp_cfg["voxel_size"],
+                            max_correspondence_distance=icp_cfg["max_correspondence_distance"],
+                            max_iterations=icp_cfg["max_iterations"],
+                            fitness_threshold=icp_cfg["fitness_threshold"],
+                        )
+                else:
+                    pose = pl.run_icp(
+                        cluster, cad_model,
+                        voxel_size=icp_cfg["voxel_size"],
+                        max_correspondence_distance=icp_cfg["max_correspondence_distance"],
+                        max_iterations=icp_cfg["max_iterations"],
+                        fitness_threshold=icp_cfg["fitness_threshold"],
+                    )
             else:
                 pose = pl._obb_fallback(cluster, reason="no CAD")
 
@@ -281,6 +300,8 @@ class Orchestrator:
                 "inlier_rmse": pose.get("inlier_rmse"),
                 "position": pose["position"],
                 "orientation": pose["orientation"],
+                "ppf_votes": pose.get("ppf_votes"),
+                "ppf_num_hypotheses": pose.get("ppf_num_hypotheses"),
             })
 
             # ICP визуализация

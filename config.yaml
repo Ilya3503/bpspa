@@ -41,6 +41,19 @@ dbscan:
   min_extent: 0.02
   max_extent: 0.30
 
+ppf:
+  enabled: true
+  sampling_step: 0.025
+  distance_step: 0.05
+  num_angles: 30
+  scene_sample_step: 0.2
+  scene_distance: 0.03
+  num_results: 5
+  min_votes_ratio: 0.3
+  normals_radius: 0.01
+  normals_max_nn: 30
+
+
 icp:
   cad_file: "Cube_30х30х30.ply"
   voxel_size: 0.003

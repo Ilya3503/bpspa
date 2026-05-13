@@ -8,6 +8,7 @@ numpy
 scipy
 matplotlib
 opencv-python
+opencv-contrib-python
 
 open3d==0.18.0
 pyrealsense2
