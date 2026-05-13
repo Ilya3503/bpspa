@@ -42,12 +42,12 @@ dbscan:
   max_extent: 0.30
 
 ppf:
-  enabled: false
-  sampling_step: 0.025
+  enabled: true
+  sampling_step: 0.05
   distance_step: 0.05
   num_angles: 30
   scene_sample_step: 0.2
-  scene_distance: 0.03
+  scene_distance: 0.05
   num_results: 5
   min_votes_ratio: 0.3
   normals_radius: 0.01
