@@ -317,6 +317,40 @@ def _pcd_to_cv_mat(pcd: o3d.geometry.PointCloud) -> np.ndarray:
     return np.hstack([pts, nrm])
 
 
+import numpy as np
+import cv2
+import open3d as o3d
+
+
+def _pcd_to_cv_mat(pcd: o3d.geometry.PointCloud) -> np.ndarray:
+    """
+    Конвертирует Open3D PointCloud в безопасную для OpenCV PPF матрицу.
+    Защищает от segfault: преобразует в float32, нормализует и делает массив непрерывным.
+    """
+    if not pcd.has_points():
+        raise ValueError("[PPF] Передано пустое облако точек CAD!")
+
+    if not pcd.has_normals():
+        raise ValueError("[PPF] У облака точек CAD отсутствуют нормали! Проверьте расчет нормалей.")
+
+    # 1. Принудительно делаем нормали единичной длины средствами Open3D
+    pcd.normalize_normals()
+
+    # 2. Извлекаем массивы в формате float32 (Open3D по умолчанию использует float64)
+    points = np.asarray(pcd.points, dtype=np.float32)
+    normals = np.asarray(pcd.normals, dtype=np.float32)
+
+    # 3. Объединяем XYZ и Normals в матрицу (N, 6)
+    # np.ascontiguousarray гарантирует, что данные лежат в памяти единым блоком C-style
+    cv_mat = np.ascontiguousarray(np.hstack((points, normals)), dtype=np.float32)
+
+    # 4. Защитная проверка на битые данные (NaN/Inf ломают хэш-таблицу PPF в C++)
+    if np.isnan(cv_mat).any() or np.isinf(cv_mat).any():
+        raise ValueError("[PPF] Матрица геометрии содержит некорректные значения (NaN или Inf)!")
+
+    return cv_mat
+
+
 def _train_ppf_if_needed(cad_pcd: o3d.geometry.PointCloud,
                          cad_name: str,
                          ppf_cfg: dict) -> tuple:
@@ -329,38 +363,42 @@ def _train_ppf_if_needed(cad_pcd: o3d.geometry.PointCloud,
             "PPF недоступен. Установите opencv-contrib-python вместо opencv-python."
         )
 
-    # ключ кэша: имя CAD + число точек + параметры PPF
+    # Ключ кэша: имя CAD + число точек + параметры PPF
     n_cad = len(cad_pcd.points)
     cad_id = f"{cad_name}_{n_cad}"
     params_id = (ppf_cfg["sampling_step"], ppf_cfg["distance_step"], ppf_cfg["num_angles"])
 
     if (_PPF_CACHE["cad_id"] == cad_id and
-        _PPF_CACHE["params"] == params_id and
-        _PPF_CACHE["detector"] is not None):
+            _PPF_CACHE["params"] == params_id and
+            _PPF_CACHE["detector"] is not None):
         return _PPF_CACHE["detector"], _PPF_CACHE["model_diameter"]
 
     log.info(f"[PPF] Тренирую модель {cad_name} ({n_cad} точек)...")
     t0 = __import__("time").perf_counter()
 
-    # нормали для CAD
-    cad_pcd = o3d.geometry.PointCloud(cad_pcd)  # копия, чтобы не модифицировать оригинал
+    # Нормали для CAD
+    cad_pcd = o3d.geometry.PointCloud(cad_pcd)  # Копия, чтобы не модифицировать оригинал
     _ensure_normals(cad_pcd, ppf_cfg["normals_radius"], ppf_cfg["normals_max_nn"])
 
+    # Безопасная конвертация в cv2.Mat (numpy.ndarray с флагом C_CONTIGUOUS)
     model_mat = _pcd_to_cv_mat(cad_pcd)
 
+    # Инициализация детектора с явным приведением типов к float и int
     detector = cv2.ppf_match_3d_PPF3DDetector(
         float(ppf_cfg["sampling_step"]),
         float(ppf_cfg["distance_step"]),
-        float(ppf_cfg["num_angles"]),
+        int(ppf_cfg["num_angles"]),  # Число углов должно быть строго целым числом
     )
+
+    # Теперь этот вызов отработает стабильно без Segmentation Fault
     detector.trainModel(model_mat)
 
-    # диаметр модели = диагональ bounding box
+    # Диаметр модели = диагональ bounding box
     extent = np.asarray(cad_pcd.get_axis_aligned_bounding_box().get_extent())
     diameter = float(np.linalg.norm(extent))
 
     elapsed = __import__("time").perf_counter() - t0
-    log.info(f"[PPF] Модель обучена за {elapsed:.2f}с, диаметр={diameter*1000:.1f}мм")
+    log.info(f"[PPF] Модель обучена за {elapsed:.2f}с, диаметр={diameter * 1000:.1f}мм")
 
     _PPF_CACHE.update({
         "cad_id": cad_id,
