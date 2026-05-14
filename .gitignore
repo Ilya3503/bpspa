@@ -7,6 +7,14 @@ __pycache__/
 *.so
 
 config.yaml
+scripts/
+.scripts
+.scripts/
+
+cad_models/
+.cad_models/
+.cad_models
+
 
 venv/
 __pycache__/

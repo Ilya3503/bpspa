@@ -1,46 +1,44 @@
 server:
-  host: "0.0.0.0"
+  host: 0.0.0.0
   port: 8000
-
 capture:
   n_views: 2
   video_feed_fps: 1
   width: 1280
   height: 720
   fps: 6
-  # ROI кроп в пикселях глубинной карты (left, right, top, bottom)
   pixel_crop:
     left: 300
     right: 200
     top: 150
     bottom: 0
-
 merge:
-  # Путь к файлу калибровочной матрицы (4x4 numpy .npy). Если нет — единичная.
-  calibration_file: "T_camB_to_camA.npy"
+  calibration_file: T_camB_to_camA.npy
   voxel_size: 0.005
-
 preprocessing:
   roi:
-    x: [-0.5, 0.5]
-    y: [-0.25, 0.25]
-    z: [0.50, 0.75]
+    x:
+    - -0.5
+    - 0.5
+    y:
+    - -0.25
+    - 0.25
+    z:
+    - 0.5
+    - 0.75
   voxel_size: 0.005
   nb_neighbors: 20
   std_ratio: 2.0
-
 plane_removal:
   enabled: true
   distance_threshold: 0.01
   ransac_n: 3
   num_iterations: 1000
-
 dbscan:
   eps: 0.025
   min_points: 50
   min_extent: 0.02
-  max_extent: 0.30
-
+  max_extent: 0.3
 ppf:
   enabled: true
   sampling_step: 0.05
@@ -52,18 +50,15 @@ ppf:
   min_votes_ratio: 0.3
   normals_radius: 0.01
   normals_max_nn: 30
-
-
 icp:
-  cad_file: "Cube_30х30х30.ply"
+  cad_file: Cube_30x30x30_m.ply
   voxel_size: 0.003
   max_correspondence_distance: 0.015
   max_iterations: 50
   fitness_threshold: 0.24
-
 robot:
-  enabled: false   # пока выключено, симуляция будет реализована позже
-  urdf_path: "robot/models/mycobot.urdf"
+  enabled: false
+  urdf_path: robot/models/mycobot.urdf
   use_gui: true
   grasp_offset_z: 0.05
   pregrasp_offset_z: 0.12
