@@ -1,17 +1,18 @@
 """
 Координатор: знает, что делать в каждом состоянии.
 Шлёт WebSocket-события на каждом шаге.
+
+Поддерживает два режима съёмки (config.capture.n_views):
+- 1: один снимок, без merge
+- 2 и больше: два снимка с merge между ними
 """
 import asyncio
 import base64
 import logging
-import time
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import numpy as np
-import open3d as o3d
 
 from core.state_machine import StateMachine, State
 from api.ws_manager import WSManager
@@ -33,15 +34,16 @@ class Orchestrator:
         self.ws = ws
         self.camera = camera
         self.config = config
-        self._busy = asyncio.Lock()    # запрещает параллельные циклы
+        self._busy = asyncio.Lock()
+
+    @property
+    def n_views(self) -> int:
+        """Текущее число ракурсов из конфига. Читаем динамически — позволяет менять без рестарта."""
+        return int(self.config.get("capture", {}).get("n_views", 2))
 
     # ---------------- публичный API ----------------
 
     async def handle_command(self, action: str):
-        """
-        Принимает команду от пользователя (через POST /command).
-        Запускает соответствующую цепочку шагов.
-        """
         if action == "stop":
             self.sm.trigger("stop")
             await self._emit_state()
@@ -56,23 +58,50 @@ class Orchestrator:
             if self._busy.locked():
                 await self.ws.broadcast({"event": "error", "message": "Уже идёт цикл"})
                 return
-            self.sm.trigger("start")
+            n = self.n_views
+            self.sm.trigger_start(n_views=n)
             await self._emit_state()
-            asyncio.create_task(self._run_full_cycle())
+            if n >= 2:
+                asyncio.create_task(self._run_two_view_cycle_first_half())
+            else:
+                asyncio.create_task(self._run_single_view_cycle())
             return
 
         if action == "next_view":
             self.sm.trigger("next_view")
             await self._emit_state()
-            asyncio.create_task(self._run_after_next_view())
+            asyncio.create_task(self._run_two_view_cycle_second_half())
             return
 
         raise ValueError(f"Неизвестная команда: {action}")
 
-    # ---------------- основной цикл ----------------
+    # ---------------- циклы ----------------
 
-    async def _run_full_cycle(self):
-        """Выполняется после команды start: захват view1 → ждём next_view."""
+    async def _run_single_view_cycle(self):
+        """Одно-ракурсный режим: один снимок → processing → execute → done."""
+        async with self._busy:
+            try:
+                input_file = await self._step_capture(view=1, single_mode=True)
+                self.sm.advance(State.PROCESSING)
+                await self._emit_state()
+
+                result = await self._step_process(input_file)
+                self.sm.set_data(last_result=result)
+                self.sm.advance(State.EXECUTING)
+                await self._emit_state()
+
+                await self._step_execute(result)
+                self.sm.advance(State.DONE)
+                await self._emit_state()
+                await self.ws.broadcast({"event": "done", "result_file": "results/position.json"})
+            except Exception as e:
+                log.exception("Ошибка в _run_single_view_cycle")
+                self.sm.fail(str(e))
+                await self.ws.broadcast({"event": "error", "message": str(e)})
+                await self._emit_state()
+
+    async def _run_two_view_cycle_first_half(self):
+        """Двух-ракурсный режим, часть 1: захват view1 → ждём next_view."""
         async with self._busy:
             try:
                 await self._step_capture(view=1)
@@ -83,13 +112,13 @@ class Orchestrator:
                     "message": "Переставьте камеру и нажмите NEXT"
                 })
             except Exception as e:
-                log.exception("Ошибка в _run_full_cycle")
+                log.exception("Ошибка в _run_two_view_cycle_first_half")
                 self.sm.fail(str(e))
                 await self.ws.broadcast({"event": "error", "message": str(e)})
                 await self._emit_state()
 
-    async def _run_after_next_view(self):
-        """Выполняется после команды next_view: захват view2 → merge → process → execute → done."""
+    async def _run_two_view_cycle_second_half(self):
+        """Двух-ракурсный режим, часть 2: захват view2 → merge → process → execute → done."""
         async with self._busy:
             try:
                 await self._step_capture(view=2)
@@ -110,25 +139,25 @@ class Orchestrator:
                 await self._emit_state()
                 await self.ws.broadcast({"event": "done", "result_file": "results/position.json"})
             except Exception as e:
-                log.exception("Ошибка в _run_after_next_view")
+                log.exception("Ошибка в _run_two_view_cycle_second_half")
                 self.sm.fail(str(e))
                 await self.ws.broadcast({"event": "error", "message": str(e)})
                 await self._emit_state()
 
     # ---------------- шаги ----------------
 
-    async def _step_capture(self, view: int):
-        await self.ws.broadcast({"event": "capture_start", "view": view})
-        # синхронный захват в threadpool
+    async def _step_capture(self, view: int, single_mode: bool = False) -> str:
+        await self.ws.broadcast({"event": "capture_start", "view": view, "single_mode": single_mode})
         loop = asyncio.get_event_loop()
         filepath = await loop.run_in_executor(None, self.camera.capture_pointcloud, "data")
         if filepath is None:
             raise RuntimeError(f"Не удалось захватить view {view}")
-        # читаем кол-во точек для события (быстро)
         pcd = pl.load_pcd(filepath)
         points = len(pcd.points)
 
-        if view == 1:
+        if single_mode:
+            self.sm.set_data(file_single=filepath)
+        elif view == 1:
             self.sm.set_data(file_view1=filepath)
         else:
             self.sm.set_data(file_view2=filepath)
@@ -136,9 +165,11 @@ class Orchestrator:
         await self.ws.broadcast({
             "event": "capture_done",
             "view": view,
+            "single_mode": single_mode,
             "file": filepath,
             "points": points,
         })
+        return filepath
 
     async def _step_merge(self) -> str:
         data = self.sm.data
@@ -147,10 +178,7 @@ class Orchestrator:
         if not file_a or not file_b:
             raise RuntimeError("Не хватает файлов для merge")
 
-        await self.ws.broadcast({
-            "event": "merging_start",
-            "files": [file_a, file_b]
-        })
+        await self.ws.broadcast({"event": "merging_start", "files": [file_a, file_b]})
 
         cfg = self.config["merge"]
         T, is_stub = pl.load_calibration_matrix(cfg["calibration_file"])
@@ -174,27 +202,25 @@ class Orchestrator:
         self.sm.set_data(merged_file=merged)
         return merged
 
-    async def _step_process(self, merged_file: str) -> dict:
-        """Полный pipeline. Выполняется в threadpool, события шлёт обёртка."""
+    async def _step_process(self, input_file: str) -> dict:
         loop = asyncio.get_event_loop()
-
-        # для отправки событий из threadpool используем broadcast_sync
         ws_sync = self.ws.broadcast_sync
 
         def _do():
-            return self._process_sync(merged_file, ws_sync)
+            return self._process_sync(input_file, ws_sync)
 
         return await loop.run_in_executor(None, _do)
 
-    def _process_sync(self, merged_file: str, emit) -> dict:
+    def _process_sync(self, input_file: str, emit) -> dict:
         """Синхронный pipeline. emit — функция для рассылки событий."""
         cfg = self.config
         pre = cfg["preprocessing"]
         plane = cfg["plane_removal"]
         db = cfg["dbscan"]
         icp_cfg = cfg["icp"]
+        global_cfg = cfg.get("global_registration", {})
 
-        pcd = pl.load_pcd(merged_file)
+        pcd = pl.load_pcd(input_file)
         pcd = pl.clean_nan(pcd)
         n0 = len(pcd.points)
 
@@ -261,37 +287,8 @@ class Orchestrator:
                   "cluster_id": i,
                   "cad_model": cad_name if cad_model else None})
 
-            if cad_model is not None:
-                ppf_cfg = cfg.get("ppf", {})
-                if ppf_cfg.get("enabled", False):
-                    try:
-                        pose = pl.run_ppf_then_icp(
-                            cluster, cad_model, cad_name,
-                            ppf_cfg=ppf_cfg,
-                            icp_cfg=icp_cfg,
-                        )
-                    except Exception as e:
-                        log.warning(f"PPF failed for cluster {i}: {e}. Fallback to ICP.")
-                        emit({"event": "ppf_error", "cluster_id": i, "error": str(e)})
-                        pose = pl.run_icp(
-                            cluster, cad_model,
-                            voxel_size=icp_cfg["voxel_size"],
-                            max_correspondence_distance=icp_cfg["max_correspondence_distance"],
-                            max_iterations=icp_cfg["max_iterations"],
-                            fitness_threshold=icp_cfg["fitness_threshold"],
-                        )
-                else:
-                    pose = pl.run_icp(
-                        cluster, cad_model,
-                        voxel_size=icp_cfg["voxel_size"],
-                        max_correspondence_distance=icp_cfg["max_correspondence_distance"],
-                        max_iterations=icp_cfg["max_iterations"],
-                        fitness_threshold=icp_cfg["fitness_threshold"],
-                    )
-            else:
-                pose = pl._obb_fallback(cluster, reason="no CAD")
+            pose = self._estimate_pose(cluster, cad_model, cad_name, icp_cfg, global_cfg, i)
 
-            # отправляем результат позы
             emit({
                 "event": "pose_estimated",
                 "cluster_id": i,
@@ -300,30 +297,26 @@ class Orchestrator:
                 "inlier_rmse": pose.get("inlier_rmse"),
                 "position": pose["position"],
                 "orientation": pose["orientation"],
-                "ppf_votes": pose.get("ppf_votes"),
-                "ppf_num_hypotheses": pose.get("ppf_num_hypotheses"),
+                "global_fitness": pose.get("global_fitness"),
+                "global_rmse": pose.get("global_rmse"),
             })
 
-            # ICP визуализация
-            if pose["method"] == "icp" and pose.get("cad_points_transformed") is not None:
+            # ICP визуализация (для всех методов, у которых есть cad_points_transformed)
+            if pose.get("cad_points_transformed") is not None:
                 cluster_pts = np.asarray(cluster.points)
                 cad_pts = pose["cad_points_transformed"]
 
-                # даунсэмпл до 5000 точек
                 def _ds_arr(arr, max_n=5000):
                     if len(arr) > max_n:
                         step = len(arr) // max_n
                         return arr[::step][:max_n]
                     return arr
 
-                cluster_pts_ds = _ds_arr(cluster_pts)
-                cad_pts_ds = _ds_arr(cad_pts)
-
                 emit({
                     "event": "icp_visualization",
                     "cluster_id": i,
-                    "cluster_points": cluster_pts_ds.tolist(),
-                    "cad_points": cad_pts_ds.tolist(),
+                    "cluster_points": _ds_arr(cluster_pts).tolist(),
+                    "cad_points": _ds_arr(cad_pts).tolist(),
                     "cad_model_name": cad_name,
                 })
 
@@ -334,7 +327,7 @@ class Orchestrator:
 
         result = {
             "status": "ok",
-            "input_file": merged_file,
+            "input_file": input_file,
             "num_clusters": len(clusters),
             "clusters": clusters_info,
             "annotated_ply": annotated,
@@ -343,19 +336,37 @@ class Orchestrator:
         pl.save_position_json(result, "results")
         return result
 
+    def _estimate_pose(self, cluster, cad_model, cad_name, icp_cfg, global_cfg, cluster_id):
+        """Выбор метода оценки позы. Изолировано чтобы не загромождать _process_sync."""
+        if cad_model is None:
+            return pl._obb_fallback(cluster, reason="no CAD")
+
+        if global_cfg.get("enabled", False):
+            try:
+                return pl.run_global_then_icp(
+                    cluster, cad_model, cad_name,
+                    global_cfg=global_cfg,
+                    icp_cfg=icp_cfg,
+                )
+            except Exception as e:
+                log.warning(f"Global registration failed for cluster {cluster_id}: {e}. Fallback to ICP.")
+
+        return pl.run_icp(
+            cluster, cad_model,
+            voxel_size=icp_cfg["voxel_size"],
+            max_correspondence_distance=icp_cfg["max_correspondence_distance"],
+            max_iterations=icp_cfg["max_iterations"],
+            fitness_threshold=icp_cfg["fitness_threshold"],
+        )
+
     async def _step_execute(self, result: dict):
-        """
-        Симуляция робота. ПОКА ЗАГЛУШКА.
-        Когда напарник реализует robot/executor.py — заменим тут вызов.
-        """
+        """Симуляция робота. Пока заглушка — реализует напарник в robot/executor.py."""
         if not self.config.get("robot", {}).get("enabled", False):
             await self.ws.broadcast({
                 "event": "simulation_skipped",
                 "reason": "robot.enabled = false в конфиге"
             })
             return
-
-        # TODO: вызов robot.executor.execute(result, config)
         await self.ws.broadcast({"event": "simulation_start"})
         await asyncio.sleep(0.1)
         await self.ws.broadcast({"event": "pick_and_place_done", "object_placed": False})
@@ -363,10 +374,6 @@ class Orchestrator:
     # ---------------- видеопоток ----------------
 
     async def video_stream_task(self):
-        """
-        Фоновая задача: каждую секунду шлёт JPEG-кадр в WS.
-        Запускается в startup сервера.
-        """
         fps = self.config["capture"].get("video_feed_fps", 1)
         delay = 1.0 / max(fps, 0.1)
         loop = asyncio.get_event_loop()
@@ -374,10 +381,8 @@ class Orchestrator:
 
         while True:
             try:
-                # захват синхронный — в executor
                 frame = await loop.run_in_executor(None, self.camera.get_color_frame_for_stream)
                 if frame is not None:
-                    # downscale для веса
                     small = cv2.resize(frame, (640, 360))
                     ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 70])
                     if ok:

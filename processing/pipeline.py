@@ -5,33 +5,30 @@
 """
 import json
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Tuple
 
 import numpy as np
 import open3d as o3d
 import matplotlib.pyplot as plt
 from scipy.spatial import KDTree
 
-try:
-    import cv2
-    HAS_CV2_PPF = hasattr(cv2, "ppf_match_3d_PPF3DDetector")
-except ImportError:
-    HAS_CV2_PPF = False
-
 log = logging.getLogger(__name__)
 
-_PPF_CACHE = {
-    "cad_id": None,         # идентификатор CAD-модели (имя файла + размер)
-    "params": None,         # параметры, при которых натренирован
-    "detector": None,       # сам PPF3DDetector
-    "model_diameter": None, # диаметр модели в метрах
+
+# Кэш FPFH-дескрипторов CAD-модели. Считаем один раз на модель — переиспользуем.
+_FPFH_CACHE = {
+    "cad_id": None,
+    "voxel_size": None,
+    "cad_down": None,        # даунсэмпленное облако CAD
+    "cad_fpfh": None,        # FPFH-фичи CAD
 }
 
 
 # ==============================================================================
-# ЗАГРУЗКА/СОХРАНЕНИЕ
+# ЗАГРУЗКА / СОХРАНЕНИЕ
 # ==============================================================================
 
 def load_pcd(path: str) -> o3d.geometry.PointCloud:
@@ -54,29 +51,20 @@ def save_pcd(pcd: o3d.geometry.PointCloud, path: str) -> str:
 # ==============================================================================
 
 def load_calibration_matrix(path: str) -> Tuple[np.ndarray, bool]:
-    """
-    Возвращает (T_4x4, is_stub).
-    Если файл не найден или не существует — возвращает единичную матрицу.
-    """
     p = Path(path)
     if not p.exists():
-        log.warning(f"Калибровочный файл не найден: {p}. Используется единичная матрица.")
+        log.warning(f"Калибровочный файл не найден: {p}. Использую единичную матрицу.")
         return np.eye(4), True
     T = np.load(str(p))
     if T.shape != (4, 4):
         log.warning(f"Калибровочная матрица не 4x4: {T.shape}. Заменяю на единичную.")
         return np.eye(4), True
-    is_stub = bool(np.allclose(T, np.eye(4)))
-    return T, is_stub
+    return T, bool(np.allclose(T, np.eye(4)))
 
 
 def merge_two_clouds(file_a: str, file_b: str, T_b_to_a: np.ndarray,
                      output_dir: str = "data",
                      voxel_size: float = 0.005) -> str:
-    """
-    Загружает два .ply, применяет трансформацию к второму, объединяет, сохраняет.
-    Возвращает путь к merged файлу.
-    """
     pcd_a = load_pcd(file_a)
     pcd_b = load_pcd(file_b)
 
@@ -85,8 +73,7 @@ def merge_two_clouds(file_a: str, file_b: str, T_b_to_a: np.ndarray,
         pcd_b = pcd_b.voxel_down_sample(voxel_size)
 
     pts_b = np.asarray(pcd_b.points)
-    ones = np.ones((pts_b.shape[0], 1))
-    pts_b_h = np.hstack([pts_b, ones])
+    pts_b_h = np.hstack([pts_b, np.ones((pts_b.shape[0], 1))])
     pts_b_transformed = (T_b_to_a @ pts_b_h.T).T[:, :3]
 
     pts_a = np.asarray(pcd_a.points)
@@ -95,7 +82,6 @@ def merge_two_clouds(file_a: str, file_b: str, T_b_to_a: np.ndarray,
     merged = o3d.geometry.PointCloud()
     merged.points = o3d.utility.Vector3dVector(pts_merged)
 
-    # цвета — если есть в обоих
     if pcd_a.has_colors() and pcd_b.has_colors():
         colors_a = np.asarray(pcd_a.colors)
         colors_b = np.asarray(pcd_b.colors)
@@ -119,8 +105,7 @@ def clean_nan(pcd: o3d.geometry.PointCloud) -> o3d.geometry.PointCloud:
     clean = o3d.geometry.PointCloud()
     clean.points = o3d.utility.Vector3dVector(pts[mask])
     if pcd.has_colors():
-        colors = np.asarray(pcd.colors)
-        clean.colors = o3d.utility.Vector3dVector(colors[mask])
+        clean.colors = o3d.utility.Vector3dVector(np.asarray(pcd.colors)[mask])
     return clean
 
 
@@ -185,8 +170,7 @@ def cluster_dbscan(pcd, eps=0.025, min_points=50,
         idx = np.where(labels == lab)[0]
         cluster = pcd.select_by_index(idx.tolist())
         cluster_pts = np.asarray(cluster.points)
-        z_range = cluster_pts[:, 2].max() - cluster_pts[:, 2].min()
-        if z_range < 0.003:
+        if cluster_pts[:, 2].max() - cluster_pts[:, 2].min() < 0.003:
             continue
         extent = cluster.get_axis_aligned_bounding_box().get_extent()
         max_dim = float(np.max(extent))
@@ -220,7 +204,7 @@ def cluster_info(cluster: o3d.geometry.PointCloud, cluster_id: int) -> dict:
 
 
 # ==============================================================================
-# ICP — собственная реализация на numpy + scipy
+# КВАТЕРНИОНЫ
 # ==============================================================================
 
 def rotation_to_quat(R: np.ndarray) -> List[float]:
@@ -252,6 +236,11 @@ def rotation_to_quat(R: np.ndarray) -> List[float]:
         z = 0.25 * s
     return [float(x), float(y), float(z), float(w)]
 
+
+# ==============================================================================
+# ICP — собственная реализация на numpy + scipy
+# (Open3D registration_icp падает на Jetson 0.18.0)
+# ==============================================================================
 
 def _icp_step(src, tgt, max_dist):
     if len(src) == 0 or len(tgt) == 0:
@@ -289,241 +278,22 @@ def _icp_step(src, tgt, max_dist):
     return T, rmse, fitness
 
 
-# ==============================================================================
-# PPF (Point Pair Features) — глобальная оценка позы через surface matching
-# ==============================================================================
-
-def _ensure_normals(pcd: o3d.geometry.PointCloud, radius: float, max_nn: int):
-    """Считает нормали для облака точек, если их ещё нет. Изменяет pcd in-place."""
-    if not pcd.has_normals() or len(pcd.normals) != len(pcd.points):
-        pcd.estimate_normals(
-            search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=radius, max_nn=max_nn)
-        )
-        # ориентируем нормали последовательно — без этого PPF может давать перевёрнутые позы
-        pcd.orient_normals_consistent_tangent_plane(k=max_nn)
-    return pcd
+def _ds_np(pts, vsize):
+    """Даунсэмпл numpy-массива точек через временный Open3D PointCloud."""
+    if vsize <= 0 or len(pts) == 0:
+        return pts
+    p = o3d.geometry.PointCloud()
+    p.points = o3d.utility.Vector3dVector(pts)
+    return np.asarray(p.voxel_down_sample(vsize).points)
 
 
-def _pcd_to_cv_mat(pcd: o3d.geometry.PointCloud) -> np.ndarray:
-    """
-    Конвертирует Open3D PointCloud в формат OpenCV PPF: Nx6 float32 [x,y,z,nx,ny,nz].
-    Нормали должны быть уже посчитаны.
-    """
-    pts = np.asarray(pcd.points, dtype=np.float32)
-    if pcd.has_normals():
-        nrm = np.asarray(pcd.normals, dtype=np.float32)
-    else:
-        nrm = np.zeros_like(pts)
-    return np.hstack([pts, nrm])
-
-
-import numpy as np
-import cv2
-import open3d as o3d
-
-
-def _pcd_to_cv_mat(pcd: o3d.geometry.PointCloud) -> np.ndarray:
-    """
-    Конвертирует Open3D PointCloud в безопасную для OpenCV PPF матрицу.
-    Защищает от segfault: преобразует в float32, нормализует и делает массив непрерывным.
-    """
-    if not pcd.has_points():
-        raise ValueError("[PPF] Передано пустое облако точек CAD!")
-
-    if not pcd.has_normals():
-        raise ValueError("[PPF] У облака точек CAD отсутствуют нормали! Проверьте расчет нормалей.")
-
-    # 1. Принудительно делаем нормали единичной длины средствами Open3D
-    pcd.normalize_normals()
-
-    # 2. Извлекаем массивы в формате float32 (Open3D по умолчанию использует float64)
-    points = np.asarray(pcd.points, dtype=np.float32)
-    normals = np.asarray(pcd.normals, dtype=np.float32)
-
-    # 3. Объединяем XYZ и Normals в матрицу (N, 6)
-    # np.ascontiguousarray гарантирует, что данные лежат в памяти единым блоком C-style
-    cv_mat = np.ascontiguousarray(np.hstack((points, normals)), dtype=np.float32)
-
-    # 4. Защитная проверка на битые данные (NaN/Inf ломают хэш-таблицу PPF в C++)
-    if np.isnan(cv_mat).any() or np.isinf(cv_mat).any():
-        raise ValueError("[PPF] Матрица геометрии содержит некорректные значения (NaN или Inf)!")
-
-    return cv_mat
-
-
-def _train_ppf_if_needed(cad_pcd: o3d.geometry.PointCloud,
-                         cad_name: str,
-                         ppf_cfg: dict) -> tuple:
-    """
-    Тренирует PPF-детектор на CAD или возвращает из кэша.
-    Возвращает (detector, model_diameter).
-    """
-    if not HAS_CV2_PPF:
-        raise RuntimeError(
-            "PPF недоступен. Установите opencv-contrib-python вместо opencv-python."
-        )
-
-    # Ключ кэша: имя CAD + число точек + параметры PPF
-    n_cad = len(cad_pcd.points)
-    cad_id = f"{cad_name}_{n_cad}"
-    params_id = (ppf_cfg["sampling_step"], ppf_cfg["distance_step"], ppf_cfg["num_angles"])
-
-    if (_PPF_CACHE["cad_id"] == cad_id and
-            _PPF_CACHE["params"] == params_id and
-            _PPF_CACHE["detector"] is not None):
-        return _PPF_CACHE["detector"], _PPF_CACHE["model_diameter"]
-
-    log.info(f"[PPF] Тренирую модель {cad_name} ({n_cad} точек)...")
-    t0 = __import__("time").perf_counter()
-
-    # Нормали для CAD
-    cad_pcd = o3d.geometry.PointCloud(cad_pcd)  # Копия, чтобы не модифицировать оригинал
-    _ensure_normals(cad_pcd, ppf_cfg["normals_radius"], ppf_cfg["normals_max_nn"])
-
-    # Безопасная конвертация в cv2.Mat (numpy.ndarray с флагом C_CONTIGUOUS)
-    model_mat = _pcd_to_cv_mat(cad_pcd)
-
-    # Инициализация детектора с явным приведением типов к float и int
-    detector = cv2.ppf_match_3d_PPF3DDetector(
-        float(ppf_cfg["sampling_step"]),
-        float(ppf_cfg["distance_step"]),
-        int(ppf_cfg["num_angles"]),  # Число углов должно быть строго целым числом
-    )
-
-    # Теперь этот вызов отработает стабильно без Segmentation Fault
-    detector.trainModel(model_mat)
-
-    # Диаметр модели = диагональ bounding box
-    extent = np.asarray(cad_pcd.get_axis_aligned_bounding_box().get_extent())
-    diameter = float(np.linalg.norm(extent))
-
-    elapsed = __import__("time").perf_counter() - t0
-    log.info(f"[PPF] Модель обучена за {elapsed:.2f}с, диаметр={diameter * 1000:.1f}мм")
-
-    _PPF_CACHE.update({
-        "cad_id": cad_id,
-        "params": params_id,
-        "detector": detector,
-        "model_diameter": diameter,
-    })
-    return detector, diameter
-
-
-def _ppf_match_scene(detector,
-                     scene_pcd: o3d.geometry.PointCloud,
-                     ppf_cfg: dict) -> list[dict]:
-    """
-    Запускает PPF-матчинг на сцене. Возвращает список гипотез поз,
-    отсортированных по убыванию числа голосов.
-    Каждый элемент: {"transformation": 4x4 np.ndarray, "num_votes": int, "model_index": int}
-    """
-    # нормали для сцены
-    scene_pcd = o3d.geometry.PointCloud(scene_pcd)
-    _ensure_normals(scene_pcd, ppf_cfg["normals_radius"], ppf_cfg["normals_max_nn"])
-
-    scene_mat = _pcd_to_cv_mat(scene_pcd)
-    if len(scene_mat) < 10:
-        return []
-
-    results = detector.match(
-        scene_mat,
-        float(ppf_cfg["scene_sample_step"]),
-        float(ppf_cfg["scene_distance"]),
-    )
-
-    poses = []
-    for r in results[: ppf_cfg["num_results"]]:
-        poses.append({
-            "transformation": np.asarray(r.pose, dtype=np.float64),
-            "num_votes": int(r.numVotes),
-            "model_index": int(r.modelIndex),
-        })
-    return poses
-
-
-def run_ppf_then_icp(cluster: o3d.geometry.PointCloud,
-                     cad_model: o3d.geometry.PointCloud,
-                     cad_name: str,
-                     ppf_cfg: dict,
-                     icp_cfg: dict) -> dict:
-    """
-    Полная связка: PPF для грубой позы → ICP для уточнения.
-    Возвращает тот же формат, что run_icp, плюс поля ppf_votes и ppf_pose_used.
-    """
-    # 1) PPF на CAD (с кэшем)
-    detector, diameter = _train_ppf_if_needed(cad_model, cad_name, ppf_cfg)
-
-    # 2) PPF матчинг на кластере
-    ppf_poses = _ppf_match_scene(detector, cluster, ppf_cfg)
-
-    if not ppf_poses:
-        log.warning("[PPF] не нашёл ни одной гипотезы — fallback на обычный ICP")
-        result = run_icp(
-            cluster, cad_model,
-            voxel_size=icp_cfg["voxel_size"],
-            max_correspondence_distance=icp_cfg["max_correspondence_distance"],
-            max_iterations=icp_cfg["max_iterations"],
-            fitness_threshold=icp_cfg["fitness_threshold"],
-        )
-        result["ppf_status"] = "no_hypotheses"
-        return result
-
-    best = ppf_poses[0]
-    best_votes = best["num_votes"]
-    min_votes = best_votes * ppf_cfg.get("min_votes_ratio", 0.3)
-    log.info(f"[PPF] лучшая гипотеза: {best_votes} голосов, всего гипотез {len(ppf_poses)}")
-
-    # 3) ICP refine с PPF-позой как initial guess
-    refined = _icp_with_initial_pose(
-        cluster, cad_model,
-        initial_transform=best["transformation"],
-        voxel_size=icp_cfg["voxel_size"],
-        max_correspondence_distance=icp_cfg["max_correspondence_distance"],
-        max_iterations=icp_cfg["max_iterations"],
-        fitness_threshold=icp_cfg["fitness_threshold"],
-    )
-    refined["method"] = "ppf+icp"
-    refined["ppf_votes"] = best_votes
-    refined["ppf_num_hypotheses"] = len(ppf_poses)
-    return refined
-
-
-def _icp_with_initial_pose(cluster: o3d.geometry.PointCloud,
-                           cad_model: o3d.geometry.PointCloud,
-                           initial_transform: np.ndarray,
-                           voxel_size: float,
-                           max_correspondence_distance: float,
-                           max_iterations: int,
-                           fitness_threshold: float) -> dict:
-    """
-    Та же логика что run_icp, но начальная поза задаётся снаружи (от PPF),
-    а не получается из совмещения центров.
-    """
-    pts_cad = np.asarray(cad_model.points, dtype=np.float64).copy()
-    # применяем initial transform от PPF
-    pts_h = np.hstack([pts_cad, np.ones((len(pts_cad), 1))])
-    pts_cad = (initial_transform @ pts_h.T).T[:, :3]
-
-    cluster_pts = np.asarray(cluster.points, dtype=np.float64).copy()
-
-    def _ds(pts, vsize):
-        if vsize <= 0 or len(pts) == 0:
-            return pts
-        p = o3d.geometry.PointCloud()
-        p.points = o3d.utility.Vector3dVector(pts)
-        p = p.voxel_down_sample(vsize)
-        return np.asarray(p.points)
-
-    src = _ds(pts_cad, voxel_size)
-    tgt = _ds(cluster_pts, voxel_size)
-
-    if len(src) < 6 or len(tgt) < 6:
-        return _obb_fallback(cluster, reason="too few points after PPF init")
-
-    T_total = initial_transform.copy()
-    prev_rmse = float("inf")
-    fitness = 0.0
-    rmse = float("inf")
+def _icp_loop(src: np.ndarray, tgt: np.ndarray,
+              max_correspondence_distance: float,
+              max_iterations: int) -> Tuple[np.ndarray, float, float]:
+    """Накопительный ICP. Возвращает (T_total, fitness, rmse)."""
+    T_total = np.eye(4)
+    prev_rmse = float('inf')
+    fitness, rmse = 0.0, float('inf')
 
     for _ in range(max_iterations):
         T_step, rmse, fitness = _icp_step(src, tgt, max_correspondence_distance)
@@ -534,27 +304,7 @@ def _icp_with_initial_pose(cluster: o3d.geometry.PointCloud,
             break
         prev_rmse = rmse
 
-    if fitness < fitness_threshold:
-        result = _obb_fallback(cluster, reason=f"low fitness after PPF+ICP {fitness:.3f}")
-        result["icp_fitness"] = float(fitness)
-        return result
-
-    R_final = T_total[:3, :3]
-    t_final = T_total[:3, 3]
-
-    return {
-        "method": "icp",   # переопределится снаружи в "ppf+icp"
-        "fitness": float(fitness),
-        "inlier_rmse": float(rmse),
-        "transformation": T_total.tolist(),
-        "position": t_final.tolist(),
-        "orientation": rotation_to_quat(R_final),
-        "extent": list(map(float, np.asarray(cluster.get_axis_aligned_bounding_box().get_extent()))),
-        "cad_points_transformed": src,
-    }
-
-
-
+    return T_total, fitness, rmse
 
 
 def run_icp(cluster: o3d.geometry.PointCloud,
@@ -564,7 +314,7 @@ def run_icp(cluster: o3d.geometry.PointCloud,
             max_iterations: int = 50,
             fitness_threshold: float = 0.24) -> dict:
     """
-    ICP через numpy. Open3D registration_icp падает на Jetson 0.18.0.
+    Локальный ICP. Начальное приближение — совмещение центров.
     Возвращает dict с position/orientation/fitness/cad_points_transformed.
     """
     pts_cad = np.asarray(cad_model.points).copy()
@@ -579,37 +329,17 @@ def run_icp(cluster: o3d.geometry.PointCloud,
     cluster_center = cluster_pts.mean(axis=0)
     pts_cad += cluster_center
 
-    def _ds(pts, vsize):
-        if vsize <= 0 or len(pts) == 0:
-            return pts
-        p = o3d.geometry.PointCloud()
-        p.points = o3d.utility.Vector3dVector(pts)
-        p = p.voxel_down_sample(vsize)
-        return np.asarray(p.points)
-
-    src = _ds(pts_cad, voxel_size)
-    tgt = _ds(cluster_pts, voxel_size)
+    src = _ds_np(pts_cad, voxel_size)
+    tgt = _ds_np(cluster_pts, voxel_size)
 
     if len(src) < 6 or len(tgt) < 6:
         return _obb_fallback(cluster, reason="too few points for ICP")
 
-    T_total = np.eye(4)
-    prev_rmse = float('inf')
-    fitness = 0.0
-    rmse = float('inf')
-
-    for it in range(max_iterations):
-        T_step, rmse, fitness = _icp_step(src, tgt, max_correspondence_distance)
-        src_h = np.hstack([src, np.ones((len(src), 1))])
-        src = (T_step @ src_h.T).T[:, :3]
-        T_total = T_step @ T_total
-        if abs(prev_rmse - rmse) < 1e-6:
-            break
-        prev_rmse = rmse
+    T_total, fitness, rmse = _icp_loop(src, tgt, max_correspondence_distance, max_iterations)
 
     if fitness < fitness_threshold:
         result = _obb_fallback(cluster, reason=f"low ICP fitness {fitness:.3f}")
-        result["icp_fitness"] = fitness
+        result["icp_fitness"] = float(fitness)
         return result
 
     R_final = T_total[:3, :3]
@@ -625,7 +355,7 @@ def run_icp(cluster: o3d.geometry.PointCloud,
         "position": cluster_center.tolist(),
         "orientation": rotation_to_quat(R_final),
         "extent": list(map(float, cluster_extent)),
-        "cad_points_transformed": src,    # numpy Nx3 — для визуализации в UI
+        "cad_points_transformed": src,
     }
 
 
@@ -641,6 +371,208 @@ def _obb_fallback(cluster, reason: str = "") -> dict:
         "orientation": rotation_to_quat(R),
         "extent": list(map(float, obb.extent)),
         "cad_points_transformed": None,
+    }
+
+
+# ==============================================================================
+# GLOBAL REGISTRATION: FPFH + RANSAC
+# Альтернатива PPF: находит грубую позу с нуля, без начального приближения.
+# Затем результат уточняется через run_icp с этим начальным трансформом.
+# ==============================================================================
+
+def _preprocess_for_fpfh(pcd: o3d.geometry.PointCloud,
+                        voxel_size: float,
+                        normal_radius_factor: float = 2.0,
+                        fpfh_radius_factor: float = 5.0,
+                        fpfh_max_nn: int = 100):
+    """
+    Даунсэмпл + нормали + FPFH-дескрипторы.
+    Возвращает (downsampled_pcd, fpfh_features).
+    """
+    down = pcd.voxel_down_sample(voxel_size)
+
+    normal_radius = voxel_size * normal_radius_factor
+    down.estimate_normals(
+        o3d.geometry.KDTreeSearchParamHybrid(radius=normal_radius, max_nn=30)
+    )
+
+    fpfh_radius = voxel_size * fpfh_radius_factor
+    fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+        down,
+        o3d.geometry.KDTreeSearchParamHybrid(radius=fpfh_radius, max_nn=fpfh_max_nn)
+    )
+    return down, fpfh
+
+
+def _train_fpfh_if_needed(cad_pcd: o3d.geometry.PointCloud,
+                          cad_name: str,
+                          voxel_size: float,
+                          cfg: dict) -> Tuple[o3d.geometry.PointCloud, object]:
+    """Считает FPFH для CAD один раз и кэширует."""
+    n_cad = len(cad_pcd.points)
+    # отпечаток содержимого — на случай если файл изменили, но имя не сменили
+    pts_sample = np.asarray(cad_pcd.points)[:10].tobytes() if n_cad > 0 else b""
+    cad_id = f"{cad_name}_{n_cad}_{hash(pts_sample)}"
+
+    if (_FPFH_CACHE["cad_id"] == cad_id and
+        _FPFH_CACHE["voxel_size"] == voxel_size and
+        _FPFH_CACHE["cad_down"] is not None):
+        return _FPFH_CACHE["cad_down"], _FPFH_CACHE["cad_fpfh"]
+
+    log.info(f"[FPFH] Вычисляю дескрипторы CAD {cad_name} ({n_cad} точек)...")
+    t0 = time.perf_counter()
+    down, fpfh = _preprocess_for_fpfh(
+        cad_pcd, voxel_size,
+        normal_radius_factor=cfg.get("normal_radius_factor", 2.0),
+        fpfh_radius_factor=cfg.get("fpfh_radius_factor", 5.0),
+        fpfh_max_nn=cfg.get("fpfh_max_nn", 100),
+    )
+    log.info(f"[FPFH] CAD: {len(down.points)} точек, готово за {time.perf_counter()-t0:.2f}с")
+
+    _FPFH_CACHE.update({
+        "cad_id": cad_id,
+        "voxel_size": voxel_size,
+        "cad_down": down,
+        "cad_fpfh": fpfh,
+    })
+    return down, fpfh
+
+
+def _ransac_global_registration(source_down, source_fpfh,
+                                target_down, target_fpfh,
+                                voxel_size: float,
+                                cfg: dict):
+    """
+    Запускает RANSAC global registration через Open3D.
+    source = CAD, target = scene cluster.
+    """
+    distance_threshold = voxel_size * cfg.get("distance_threshold_factor", 1.5)
+    return o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
+        source_down, target_down, source_fpfh, target_fpfh,
+        mutual_filter=cfg.get("mutual_filter", True),
+        max_correspondence_distance=distance_threshold,
+        estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
+        ransac_n=cfg.get("ransac_n", 3),
+        checkers=[
+            o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(
+                cfg.get("edge_length_threshold", 0.9)),
+            o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold),
+        ],
+        criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(
+            cfg.get("max_iterations", 100000),
+            cfg.get("confidence", 0.999)),
+    )
+
+
+def run_global_then_icp(cluster: o3d.geometry.PointCloud,
+                        cad_model: o3d.geometry.PointCloud,
+                        cad_name: str,
+                        global_cfg: dict,
+                        icp_cfg: dict) -> dict:
+    """
+    FPFH+RANSAC для грубой позы → ICP для уточнения.
+    Возвращает тот же формат, что run_icp, плюс поля global_fitness/global_rmse.
+    """
+    voxel_size = global_cfg.get("voxel_size", 0.005)
+
+    # 1) FPFH для CAD (с кэшем)
+    cad_down, cad_fpfh = _train_fpfh_if_needed(cad_model, cad_name, voxel_size, global_cfg)
+
+    # 2) FPFH для сцены (кластера)
+    t0 = time.perf_counter()
+    cluster_down, cluster_fpfh = _preprocess_for_fpfh(
+        cluster, voxel_size,
+        normal_radius_factor=global_cfg.get("normal_radius_factor", 2.0),
+        fpfh_radius_factor=global_cfg.get("fpfh_radius_factor", 5.0),
+        fpfh_max_nn=global_cfg.get("fpfh_max_nn", 100),
+    )
+
+    if len(cluster_down.points) < 6:
+        log.warning(f"[FPFH] кластер слишком мал ({len(cluster_down.points)}) — fallback ICP")
+        return run_icp(
+            cluster, cad_model,
+            voxel_size=icp_cfg["voxel_size"],
+            max_correspondence_distance=icp_cfg["max_correspondence_distance"],
+            max_iterations=icp_cfg["max_iterations"],
+            fitness_threshold=icp_cfg["fitness_threshold"],
+        )
+
+    # 3) RANSAC global registration
+    result = _ransac_global_registration(
+        cad_down, cad_fpfh, cluster_down, cluster_fpfh,
+        voxel_size, global_cfg,
+    )
+    log.info(f"[FPFH+RANSAC] fitness={result.fitness:.3f} rmse={result.inlier_rmse:.4f} "
+             f"за {time.perf_counter()-t0:.2f}с")
+
+    if result.fitness < global_cfg.get("min_fitness", 0.1):
+        log.warning(f"[FPFH+RANSAC] низкий fitness {result.fitness:.3f} — fallback ICP")
+        fallback = run_icp(
+            cluster, cad_model,
+            voxel_size=icp_cfg["voxel_size"],
+            max_correspondence_distance=icp_cfg["max_correspondence_distance"],
+            max_iterations=icp_cfg["max_iterations"],
+            fitness_threshold=icp_cfg["fitness_threshold"],
+        )
+        fallback["global_fitness_attempted"] = float(result.fitness)
+        return fallback
+
+    # 4) ICP refine с найденной позой как initial guess
+    initial_T = np.asarray(result.transformation, dtype=np.float64)
+    refined = _icp_with_initial_transform(
+        cluster, cad_model,
+        initial_transform=initial_T,
+        voxel_size=icp_cfg["voxel_size"],
+        max_correspondence_distance=icp_cfg["max_correspondence_distance"],
+        max_iterations=icp_cfg["max_iterations"],
+        fitness_threshold=icp_cfg["fitness_threshold"],
+    )
+    refined["method"] = "fpfh+icp"
+    refined["global_fitness"] = float(result.fitness)
+    refined["global_rmse"] = float(result.inlier_rmse)
+    return refined
+
+
+def _icp_with_initial_transform(cluster: o3d.geometry.PointCloud,
+                                cad_model: o3d.geometry.PointCloud,
+                                initial_transform: np.ndarray,
+                                voxel_size: float,
+                                max_correspondence_distance: float,
+                                max_iterations: int,
+                                fitness_threshold: float) -> dict:
+    """ICP с начальным приближением (от global registration), без масштабирования."""
+    pts_cad = np.asarray(cad_model.points, dtype=np.float64).copy()
+    pts_h = np.hstack([pts_cad, np.ones((len(pts_cad), 1))])
+    pts_cad = (initial_transform @ pts_h.T).T[:, :3]
+
+    cluster_pts = np.asarray(cluster.points, dtype=np.float64).copy()
+
+    src = _ds_np(pts_cad, voxel_size)
+    tgt = _ds_np(cluster_pts, voxel_size)
+
+    if len(src) < 6 or len(tgt) < 6:
+        return _obb_fallback(cluster, reason="too few points after global init")
+
+    T_step_total, fitness, rmse = _icp_loop(src, tgt, max_correspondence_distance, max_iterations)
+    T_total = T_step_total @ initial_transform
+
+    if fitness < fitness_threshold:
+        result = _obb_fallback(cluster, reason=f"low fitness after global+ICP {fitness:.3f}")
+        result["icp_fitness"] = float(fitness)
+        return result
+
+    R_final = T_total[:3, :3]
+    t_final = T_total[:3, 3]
+
+    return {
+        "method": "icp",   # переопределится в run_global_then_icp
+        "fitness": float(fitness),
+        "inlier_rmse": float(rmse),
+        "transformation": T_total.tolist(),
+        "position": t_final.tolist(),
+        "orientation": rotation_to_quat(R_final),
+        "extent": list(map(float, np.asarray(cluster.get_axis_aligned_bounding_box().get_extent()))),
+        "cad_points_transformed": src,
     }
 
 
@@ -679,7 +611,6 @@ def make_annotated_ply(pcd, clusters, results_dir: str) -> str:
 
 def save_position_json(result: dict, results_dir: str) -> str:
     p = Path(results_dir) / "position.json"
-    # отдельно убираем numpy-массив cad_points_transformed (он не JSON-сериализуется и большой)
     def _clean(d):
         if isinstance(d, dict):
             return {k: _clean(v) for k, v in d.items() if k != "cad_points_transformed"}
