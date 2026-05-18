@@ -542,6 +542,105 @@ def run_global_then_icp(cluster: o3d.geometry.PointCloud,
     return refined
 
 
+def run_iterative_global(scene_pcd: o3d.geometry.PointCloud,
+                         cad_model: o3d.geometry.PointCloud,
+                         cad_name: str,
+                         global_cfg: dict,
+                         icp_cfg: dict,
+                         iter_cfg: dict) -> List[dict]:
+    """
+    Iterative FPFH+RANSAC: ищет несколько экземпляров CAD во всём облаке сцены.
+    После каждой найденной позы удаляет inlier-точки и запускает поиск снова.
+    Возвращает список поз (тот же формат что run_global_then_icp).
+    Без DBSCAN — работает прямо на облаке сцены после плоскости.
+    """
+    max_instances = int(iter_cfg.get("max_instances", 10))
+    min_fitness = float(iter_cfg.get("min_fitness", 0.15))
+    min_remaining_points = int(iter_cfg.get("min_remaining_points", 200))
+    inlier_radius = float(iter_cfg.get("inlier_radius", 0.005))
+
+    voxel_size = global_cfg.get("voxel_size", 0.005)
+
+    # FPFH для CAD один раз
+    cad_down, cad_fpfh = _train_fpfh_if_needed(cad_model, cad_name, voxel_size, global_cfg)
+
+    remaining_pts = np.asarray(scene_pcd.points, dtype=np.float64).copy()
+    poses: List[dict] = []
+
+    for it in range(max_instances):
+        if len(remaining_pts) < min_remaining_points:
+            log.info(f"[iter-RANSAC] осталось {len(remaining_pts)} точек < порога — стоп")
+            break
+
+        # собираем временный PointCloud из оставшихся точек
+        scene_tmp = o3d.geometry.PointCloud()
+        scene_tmp.points = o3d.utility.Vector3dVector(remaining_pts)
+
+        scene_down, scene_fpfh = _preprocess_for_fpfh(
+            scene_tmp, voxel_size,
+            normal_radius_factor=global_cfg.get("normal_radius_factor", 2.0),
+            fpfh_radius_factor=global_cfg.get("fpfh_radius_factor", 5.0),
+            fpfh_max_nn=global_cfg.get("fpfh_max_nn", 100),
+        )
+        if len(scene_down.points) < 6:
+            log.info(f"[iter-RANSAC] after downsample слишком мало точек — стоп")
+            break
+
+        result = _ransac_global_registration(
+            cad_down, cad_fpfh, scene_down, scene_fpfh,
+            voxel_size, global_cfg,
+        )
+        global_fitness = float(result.fitness)
+        global_rmse = float(result.inlier_rmse)
+        initial_T = np.array(result.transformation, dtype=np.float64, copy=True)
+        del result
+
+        log.info(f"[iter-RANSAC] iter {it}: fitness={global_fitness:.3f} rmse={global_rmse:.4f} "
+                 f"on {len(remaining_pts)} pts")
+
+        if global_fitness < min_fitness:
+            log.info(f"[iter-RANSAC] fitness {global_fitness:.3f} < {min_fitness} — стоп")
+            break
+
+        # ICP refine на «полной» сцене (не даунсэмплированной) — для точности позы
+        tmp_pcd_for_icp = o3d.geometry.PointCloud()
+        tmp_pcd_for_icp.points = o3d.utility.Vector3dVector(remaining_pts)
+        refined = _icp_with_initial_transform(
+            tmp_pcd_for_icp, cad_model,
+            initial_transform=initial_T,
+            voxel_size=icp_cfg["voxel_size"],
+            max_correspondence_distance=icp_cfg["max_correspondence_distance"],
+            max_iterations=icp_cfg["max_iterations"],
+            fitness_threshold=icp_cfg["fitness_threshold"],
+        )
+        if refined.get("method") == "icp":
+            refined["method"] = "fpfh+icp"
+        refined["global_fitness"] = global_fitness
+        refined["global_rmse"] = global_rmse
+        refined["iteration"] = it
+        poses.append(refined)
+
+        # удаляем точки сцены, объяснённые этой позой (всё в numpy — без падений Open3D)
+        T = np.array(refined["transformation"], dtype=np.float64)
+        cad_pts = np.asarray(cad_model.points, dtype=np.float64)
+        cad_pts_h = np.hstack([cad_pts, np.ones((len(cad_pts), 1))])
+        cad_transformed = (T @ cad_pts_h.T).T[:, :3]
+
+        tree = KDTree(cad_transformed)
+        dists, _ = tree.query(remaining_pts, k=1)
+        keep_mask = dists > inlier_radius
+        removed = int((~keep_mask).sum())
+        remaining_pts = remaining_pts[keep_mask]
+        log.info(f"[iter-RANSAC] удалено {removed} точек, осталось {len(remaining_pts)}")
+
+        if removed < 10:
+            # ничего не удалили — нет смысла продолжать
+            log.info("[iter-RANSAC] нечего удалять — стоп")
+            break
+
+    log.info(f"[iter-RANSAC] найдено экземпляров: {len(poses)}")
+    return poses
+
 
 def _icp_with_initial_transform(cluster: o3d.geometry.PointCloud,
                                 cad_model: o3d.geometry.PointCloud,

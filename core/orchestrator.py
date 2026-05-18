@@ -253,6 +253,21 @@ class Orchestrator:
             emit({"event": "processing_step", "step": "ransac_plane",
                   "points_before": n, "points_after": len(pcd.points)})
 
+        # CAD модель — определяем заранее, нужно для обоих путей обработки
+        cad_model = None
+        cad_name = icp_cfg.get("cad_file")
+        if cad_name:
+            cad_path = Path("cad_models") / cad_name
+            if cad_path.exists():
+                cad_model = pl.load_pcd(str(cad_path))
+            else:
+                log.warning(f"CAD не найден: {cad_path}")
+
+        # Развилка: iterative FPFH+RANSAC по всему облаку, или DBSCAN+ICP по кластерам
+        iter_cfg = cfg.get("iterative_match", {})
+        if iter_cfg.get("enabled", False) and cad_name:
+            return self._process_iterative(pcd, cad_name, icp_cfg, global_cfg, iter_cfg, emit, plane_model, input_file)
+
         clusters = pl.cluster_dbscan(
             pcd,
             eps=db["eps"],
@@ -265,16 +280,6 @@ class Orchestrator:
             "num_clusters": len(clusters),
             "clusters": [{"id": i, "points": len(c.points)} for i, c in enumerate(clusters)]
         })
-
-        # CAD модель
-        cad_model = None
-        cad_name = icp_cfg.get("cad_file")
-        if cad_name:
-            cad_path = Path("cad_models") / cad_name
-            if cad_path.exists():
-                cad_model = pl.load_pcd(str(cad_path))
-            else:
-                log.warning(f"CAD не найден: {cad_path}")
 
         Path("results/clusters").mkdir(parents=True, exist_ok=True)
         pl.save_clusters(clusters, "results/clusters")
@@ -332,6 +337,64 @@ class Orchestrator:
             "clusters": clusters_info,
             "annotated_ply": annotated,
             "plane_model": plane_model,
+        }
+        pl.save_position_json(result, "results")
+        return result
+
+    def _process_iterative(self, pcd, cad_name, icp_cfg, global_cfg, iter_cfg, emit, plane_model, input_file):
+        """Альтернативный путь: iterative FPFH+RANSAC без DBSCAN."""
+        cad_path = Path("cad_models") / cad_name
+        if not cad_path.exists():
+            raise FileNotFoundError(f"CAD не найден: {cad_path}")
+        cad_model = pl.load_pcd(str(cad_path))
+
+        emit({"event": "iterative_start", "scene_points": len(pcd.points)})
+        poses = pl.run_iterative_global(pcd, cad_model, cad_name, global_cfg, icp_cfg, iter_cfg)
+
+        clusters_info = []
+        for i, pose in enumerate(poses):
+            info = {"id": i, "points_count": None, "extent": pose.get("extent", [])}
+            info["pose"] = {k: v for k, v in pose.items() if k != "cad_points_transformed"}
+
+            emit({
+                "event": "pose_estimated",
+                "cluster_id": i,
+                "method": pose["method"],
+                "fitness": pose.get("fitness"),
+                "inlier_rmse": pose.get("inlier_rmse"),
+                "position": pose["position"],
+                "orientation": pose["orientation"],
+                "global_fitness": pose.get("global_fitness"),
+                "global_rmse": pose.get("global_rmse"),
+            })
+
+            if pose.get("cad_points_transformed") is not None:
+                cad_pts = pose["cad_points_transformed"]
+
+                def _ds_arr(arr, max_n=5000):
+                    if len(arr) > max_n:
+                        step = len(arr) // max_n
+                        return arr[::step][:max_n]
+                    return arr
+
+                emit({
+                    "event": "icp_visualization",
+                    "cluster_id": i,
+                    "cluster_points": _ds_arr(np.asarray(pcd.points)).tolist(),
+                    "cad_points": _ds_arr(cad_pts).tolist(),
+                    "cad_model_name": cad_name,
+                })
+
+            clusters_info.append(info)
+
+        result = {
+            "status": "ok",
+            "input_file": input_file,
+            "num_clusters": len(poses),
+            "clusters": clusters_info,
+            "annotated_ply": None,
+            "plane_model": plane_model,
+            "pipeline_mode": "iterative_match",
         }
         pl.save_position_json(result, "results")
         return result
