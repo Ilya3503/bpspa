@@ -535,7 +535,8 @@ def run_global_then_icp(cluster: o3d.geometry.PointCloud,
         max_iterations=icp_cfg["max_iterations"],
         fitness_threshold=icp_cfg["fitness_threshold"],
     )
-    refined["method"] = "fpfh+icp"
+    if refined.get("method") == "icp":
+        refined["method"] = "fpfh+icp"
     refined["global_fitness"] = global_fitness
     refined["global_rmse"] = global_rmse
     return refined
