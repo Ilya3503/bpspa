@@ -278,13 +278,15 @@ def _icp_step(src, tgt, max_dist):
     return T, rmse, fitness
 
 
-def _ds_np(pts, vsize):
-    """Даунсэмпл numpy-массива точек через временный Open3D PointCloud."""
+def _ds_np(pts: np.ndarray, vsize: float) -> np.ndarray:
+
     if vsize <= 0 or len(pts) == 0:
         return pts
-    p = o3d.geometry.PointCloud()
-    p.points = o3d.utility.Vector3dVector(pts)
-    return np.asarray(p.voxel_down_sample(vsize).points)
+    # квантование в индексы вокселя
+    voxel_indices = np.floor(pts / vsize).astype(np.int64)
+    # уникальные воксели и индексы первого вхождения каждой точки
+    _, unique_idx = np.unique(voxel_indices, axis=0, return_index=True)
+    return pts[unique_idx]
 
 
 def _icp_loop(src: np.ndarray, tgt: np.ndarray,
@@ -497,40 +499,47 @@ def run_global_then_icp(cluster: o3d.geometry.PointCloud,
             fitness_threshold=icp_cfg["fitness_threshold"],
         )
 
-    # 3) RANSAC global registration
-    result = _ransac_global_registration(
-        cad_down, cad_fpfh, cluster_down, cluster_fpfh,
-        voxel_size, global_cfg,
-    )
-    log.info(f"[FPFH+RANSAC] fitness={result.fitness:.3f} rmse={result.inlier_rmse:.4f} "
-             f"за {time.perf_counter()-t0:.2f}с")
+        # 3) RANSAC global registration
+        result = _ransac_global_registration(
+            cad_down, cad_fpfh, cluster_down, cluster_fpfh,
+            voxel_size, global_cfg,
+        )
+        # СРАЗУ извлекаем данные в plain Python типы и numpy.
+        # Объект `result` (RegistrationResult) больше не трогаем — он остаётся в Open3D,
+        # и любое обращение к нему после следующей PointCloud-операции может крашнуть процесс.
+        global_fitness = float(result.fitness)
+        global_rmse = float(result.inlier_rmse)
+        initial_T = np.array(result.transformation, dtype=np.float64, copy=True)
+        del result  # явный сигнал GC отдать объект Open3D как можно раньше
 
-    if result.fitness < global_cfg.get("min_fitness", 0.1):
-        log.warning(f"[FPFH+RANSAC] низкий fitness {result.fitness:.3f} — fallback ICP")
-        fallback = run_icp(
+        log.info(f"[FPFH+RANSAC] fitness={global_fitness:.3f} rmse={global_rmse:.4f} "
+                 f"за {time.perf_counter() - t0:.2f}с")
+
+        if global_fitness < global_cfg.get("min_fitness", 0.1):
+            log.warning(f"[FPFH+RANSAC] низкий fitness {global_fitness:.3f} — fallback ICP")
+            fallback = run_icp(
+                cluster, cad_model,
+                voxel_size=icp_cfg["voxel_size"],
+                max_correspondence_distance=icp_cfg["max_correspondence_distance"],
+                max_iterations=icp_cfg["max_iterations"],
+                fitness_threshold=icp_cfg["fitness_threshold"],
+            )
+            fallback["global_fitness_attempted"] = global_fitness
+            return fallback
+
+        # 4) ICP refine с найденной позой как initial guess (всё на numpy)
+        refined = _icp_with_initial_transform(
             cluster, cad_model,
+            initial_transform=initial_T,
             voxel_size=icp_cfg["voxel_size"],
             max_correspondence_distance=icp_cfg["max_correspondence_distance"],
             max_iterations=icp_cfg["max_iterations"],
             fitness_threshold=icp_cfg["fitness_threshold"],
         )
-        fallback["global_fitness_attempted"] = float(result.fitness)
-        return fallback
-
-    # 4) ICP refine с найденной позой как initial guess
-    initial_T = np.asarray(result.transformation, dtype=np.float64)
-    refined = _icp_with_initial_transform(
-        cluster, cad_model,
-        initial_transform=initial_T,
-        voxel_size=icp_cfg["voxel_size"],
-        max_correspondence_distance=icp_cfg["max_correspondence_distance"],
-        max_iterations=icp_cfg["max_iterations"],
-        fitness_threshold=icp_cfg["fitness_threshold"],
-    )
-    refined["method"] = "fpfh+icp"
-    refined["global_fitness"] = float(result.fitness)
-    refined["global_rmse"] = float(result.inlier_rmse)
-    return refined
+        refined["method"] = "fpfh+icp"
+        refined["global_fitness"] = global_fitness
+        refined["global_rmse"] = global_rmse
+        return refined
 
 
 def _icp_with_initial_transform(cluster: o3d.geometry.PointCloud,
