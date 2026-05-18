@@ -602,7 +602,7 @@ def run_iterative_global(scene_pcd: o3d.geometry.PointCloud,
             log.info(f"[iter-RANSAC] fitness {global_fitness:.3f} < {min_fitness} — стоп")
             break
 
-        # ICP refine на «полной» сцене (не даунсэмплированной) — для точности позы
+        # ICP refine на «полной» сцене для точности позы
         tmp_pcd_for_icp = o3d.geometry.PointCloud()
         tmp_pcd_for_icp.points = o3d.utility.Vector3dVector(remaining_pts)
         refined = _icp_with_initial_transform(
@@ -613,8 +613,30 @@ def run_iterative_global(scene_pcd: o3d.geometry.PointCloud,
             max_iterations=icp_cfg["max_iterations"],
             fitness_threshold=icp_cfg["fitness_threshold"],
         )
-        if refined.get("method") == "icp":
-            refined["method"] = "fpfh+icp"
+
+        # Если ICP не сошёлся (fallback в OBB) — используем позу от RANSAC как есть.
+        # Это нормально для iterative-режима: RANSAC уже нашёл достоверное совпадение.
+        if refined.get("method") == "obb_fallback" or "transformation" not in refined:
+            log.info(f"[iter-RANSAC] iter {it}: ICP refine не прошёл, использую позу от RANSAC")
+            R_init = initial_T[:3, :3]
+            t_init = initial_T[:3, 3]
+            cad_pts = np.asarray(cad_model.points, dtype=np.float64)
+            cad_h = np.hstack([cad_pts, np.ones((len(cad_pts), 1))])
+            cad_transformed = (initial_T @ cad_h.T).T[:, :3]
+            refined = {
+                "method": "fpfh_only",
+                "fitness": global_fitness,
+                "inlier_rmse": global_rmse,
+                "transformation": initial_T.tolist(),
+                "position": t_init.tolist(),
+                "orientation": rotation_to_quat(R_init),
+                "extent": [float(cad_transformed.max(axis=0)[i] - cad_transformed.min(axis=0)[i]) for i in range(3)],
+                "cad_points_transformed": cad_transformed,
+            }
+        else:
+            if refined.get("method") == "icp":
+                refined["method"] = "fpfh+icp"
+
         refined["global_fitness"] = global_fitness
         refined["global_rmse"] = global_rmse
         refined["iteration"] = it
