@@ -680,7 +680,7 @@ def _icp_with_initial_transform(cluster: o3d.geometry.PointCloud,
         "transformation": T_total.tolist(),
         "position": t_final.tolist(),
         "orientation": rotation_to_quat(R_final),
-        "extent": list(map(float, np.asarray(cluster.get_axis_aligned_bounding_box().get_extent()))),
+        "extent": [float(src.max(axis=0)[i] - src.min(axis=0)[i]) for i in range(3)],
         "cad_points_transformed": src,
     }
 
@@ -698,6 +698,40 @@ def save_clusters(clusters, clusters_dir: str) -> List[str]:
         paths.append(str(p))
     return paths
 
+def make_iterative_annotated_ply(scene_pcd, poses, cad_model, results_dir: str) -> str:
+    """
+    Визуализация для iterative-режима: исходная сцена серым + CAD-модели
+    по найденным позам разными цветами.
+    """
+    out = Path(results_dir) / "annotated_pointcloud.ply"
+    all_p, all_c = [], []
+
+    # Сцена серым
+    scene_pts = np.asarray(scene_pcd.points)
+    if len(scene_pts) > 0:
+        all_p.append(scene_pts)
+        all_c.append(np.tile([0.4, 0.4, 0.4], (len(scene_pts), 1)))
+
+    # CAD по найденным позам — каждая своим цветом
+    cmap = plt.get_cmap("tab10")(np.linspace(0, 1, 10))[:, :3]
+    cad_pts_orig = np.asarray(cad_model.points)
+
+    for i, pose in enumerate(poses):
+        T = np.array(pose["transformation"], dtype=np.float64)
+        cad_h = np.hstack([cad_pts_orig, np.ones((len(cad_pts_orig), 1))])
+        cad_transformed = (T @ cad_h.T).T[:, :3]
+        clr = np.tile(cmap[i % len(cmap)], (len(cad_transformed), 1))
+        all_p.append(cad_transformed)
+        all_c.append(clr)
+
+    if not all_p:
+        return str(out)
+
+    m = o3d.geometry.PointCloud()
+    m.points = o3d.utility.Vector3dVector(np.vstack(all_p))
+    m.colors = o3d.utility.Vector3dVector(np.vstack(all_c))
+    o3d.io.write_point_cloud(str(out), m)
+    return str(out)
 
 def make_annotated_ply(pcd, clusters, results_dir: str) -> str:
     out = Path(results_dir) / "annotated_pointcloud.ply"

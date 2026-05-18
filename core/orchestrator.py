@@ -387,12 +387,16 @@ class Orchestrator:
 
             clusters_info.append(info)
 
+        annotated = pl.make_iterative_annotated_ply(pcd, [
+            {k: v for k, v in p.items() if k != "cad_points_transformed"} for p in poses
+        ], cad_model, "results")
+
         result = {
             "status": "ok",
             "input_file": input_file,
             "num_clusters": len(poses),
             "clusters": clusters_info,
-            "annotated_ply": None,
+            "annotated_ply": annotated,
             "plane_model": plane_model,
             "pipeline_mode": "iterative_match",
         }
