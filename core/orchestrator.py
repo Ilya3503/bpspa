@@ -387,10 +387,47 @@ class Orchestrator:
 
             clusters_info.append(info)
 
+        # === PLANAR FALLBACK ===
+        # Запускаем когда основной путь не нашёл годных поз или дал слишком слабые.
+        planar_cfg = self.config.get("planar_fallback", {})
+        if planar_cfg.get("enabled", False):
+            best_fit = max((p.get("fitness") or 0.0) for p in poses) if poses else 0.0
+            trigger = float(planar_cfg.get("trigger_max_fitness", 0.20))
+            if best_fit < trigger:
+                log.info(f"[planar] основной путь слаб (best_fitness={best_fit:.3f} < {trigger}), "
+                         f"запускаю planar_fallback")
+                from processing import regiongrow as rg
+                pts_np = np.asarray(pcd.points, dtype=np.float64)
+                cad_pts_np = np.asarray(cad_model.points, dtype=np.float64)
+                planar_pose = rg.run_planar_fallback(pts_np, cad_pts_np, planar_cfg)
+                if planar_pose is not None:
+                    i = len(poses)
+                    poses.append(planar_pose)
+                    info = {
+                        "id": i,
+                        "points_count": planar_pose.get("region_points_count"),
+                        "extent": planar_pose.get("extent", []),
+                    }
+                    info["pose"] = {k: v for k, v in planar_pose.items()
+                                    if k != "cad_points_transformed"}
+                    clusters_info.append(info)
+                    emit({
+                        "event": "pose_estimated",
+                        "cluster_id": i,
+                        "method": planar_pose["method"],
+                        "fitness": None,
+                        "inlier_rmse": None,
+                        "confidence": planar_pose.get("confidence"),
+                        "position": planar_pose["position"],
+                        "orientation": planar_pose["orientation"],
+                    })
+
+        # === КОНЕЦ PLANAR FALLBACK ===
         annotated = pl.make_iterative_annotated_ply(pcd, [
             {k: v for k, v in p.items() if k != "cad_points_transformed"} for p in poses
         ], cad_model, "results")
 
+        used_planar = any(c.get("pose", {}).get("method") == "planar_fallback" for c in clusters_info)
         result = {
             "status": "ok",
             "input_file": input_file,
@@ -398,7 +435,7 @@ class Orchestrator:
             "clusters": clusters_info,
             "annotated_ply": annotated,
             "plane_model": plane_model,
-            "pipeline_mode": "iterative_match",
+            "pipeline_mode": "iterative_match+planar" if used_planar else "iterative_match",
         }
         pl.save_position_json(result, "results")
         return result
