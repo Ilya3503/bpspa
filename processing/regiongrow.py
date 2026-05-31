@@ -68,6 +68,7 @@ def region_growing_planar(pts: np.ndarray,
                           curvature_threshold: float = 0.05,
                           min_region_points: int = 200,
                           max_regions: int = 20,
+                          max_edge_dist: float = 0.005,
                           ) -> List[np.ndarray]:
     """
     Region growing по нормалям (Smoothness Constraint).
@@ -110,6 +111,11 @@ def region_growing_planar(pts: np.ndarray,
             sp_normal = normals[sp]
             for nb in neighbours[sp]:
                 if not available[nb]:
+                    continue
+                # Евклидов разрыв: сосед из KDTree может физически лежать на другом
+                # объекте (копланарная грань соседнего куба). Если он дальше порога —
+                # не растём в него, даже если нормали параллельны.
+                if np.linalg.norm(pts[sp] - pts[nb]) > max_edge_dist:
                     continue
                 # |cos(angle)| — учитываем что нормаль может быть ориентирована
                 # в любую сторону; нас интересует только параллельность поверхностей
@@ -336,6 +342,7 @@ def run_planar_fallback(pts: np.ndarray,
         curvature_threshold=float(cfg.get("curvature_threshold", 0.05)),
         min_region_points=int(cfg.get("min_region_points", 200)),
         max_regions=int(cfg.get("max_regions", 20)),
+        max_edge_dist=float(cfg.get("max_edge_dist", 0.005)),
     )
     log.info(f"[planar] region growing: {len(regions)} регионов за {time.perf_counter()-t1:.2f}с")
 
