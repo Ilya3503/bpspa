@@ -214,6 +214,7 @@ class Orchestrator:
     def _process_sync(self, input_file: str, emit) -> dict:
         """Синхронный pipeline. emit — функция для рассылки событий."""
         cfg = self.config
+        run_dir = self._make_run_dir()
         pre = cfg["preprocessing"]
         plane = cfg["plane_removal"]
         db = cfg["dbscan"]
@@ -281,8 +282,8 @@ class Orchestrator:
             "clusters": [{"id": i, "points": len(c.points)} for i, c in enumerate(clusters)]
         })
 
-        Path("results/clusters").mkdir(parents=True, exist_ok=True)
-        pl.save_clusters(clusters, "results/clusters")
+        Path(run_dir, "clusters").mkdir(parents=True, exist_ok=True)
+        pl.save_clusters(clusters, str(Path(run_dir, "clusters")))
 
         clusters_info = []
         for i, cluster in enumerate(clusters):
@@ -328,22 +329,23 @@ class Orchestrator:
             info["pose"] = {k: v for k, v in pose.items() if k != "cad_points_transformed"}
             clusters_info.append(info)
 
-        annotated = pl.make_annotated_ply(pcd, clusters, "results")
-
         result = {
             "status": "ok",
             "input_file": input_file,
             "num_clusters": len(clusters),
             "clusters": clusters_info,
-            "annotated_ply": annotated,
             "plane_model": plane_model,
         }
-        pl.save_position_json(result, "results")
+        if clusters:
+            result["annotated_ply"] = pl.make_annotated_ply(pcd, clusters, run_dir)
+        pl.save_position_json(result, run_dir)
+        self._finalize_run_dir(run_dir, len(clusters))
         return result
 
     def _process_iterative(self, pcd, cad_name, icp_cfg, global_cfg, iter_cfg, emit, plane_model, input_file):
         """Альтернативный путь: iterative FPFH+RANSAC без DBSCAN."""
         cad_path = Path("cad_models") / cad_name
+        run_dir = self._make_run_dir()
         if not cad_path.exists():
             raise FileNotFoundError(f"CAD не найден: {cad_path}")
         cad_model = pl.load_pcd(str(cad_path))
@@ -423,21 +425,21 @@ class Orchestrator:
                     })
 
         # === КОНЕЦ PLANAR FALLBACK ===
-        annotated = pl.make_iterative_annotated_ply(pcd, [
-            {k: v for k, v in p.items() if k != "cad_points_transformed"} for p in poses
-        ], cad_model, "results")
-
         used_planar = any(c.get("pose", {}).get("method") == "planar_fallback" for c in clusters_info)
         result = {
             "status": "ok",
             "input_file": input_file,
             "num_clusters": len(poses),
             "clusters": clusters_info,
-            "annotated_ply": annotated,
             "plane_model": plane_model,
             "pipeline_mode": "iterative_match+planar" if used_planar else "iterative_match",
         }
-        pl.save_position_json(result, "results")
+        if poses:
+            result["annotated_ply"] = pl.make_iterative_annotated_ply(pcd, [
+                {k: v for k, v in p.items() if k != "cad_points_transformed"} for p in poses
+            ], cad_model, run_dir)
+        pl.save_position_json(result, run_dir)
+        self._finalize_run_dir(run_dir, len(poses))
         return result
 
     def _estimate_pose(self, cluster, cad_model, cad_name, icp_cfg, global_cfg, cluster_id):
@@ -507,3 +509,23 @@ class Orchestrator:
             "state": self.sm.state.value,
             "data_keys": list(self.sm.data.keys()),
         })
+
+    @staticmethod
+    def _make_run_dir() -> str:
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        run_dir = Path("results") / f"run_{ts}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return str(run_dir)
+
+
+    @staticmethod
+    def _finalize_run_dir(run_dir: str, n_clusters: int) -> str:
+        src = Path(run_dir)
+        dst = src.with_name(f"{src.name}_n{n_clusters}")
+        try:
+            src.rename(dst)
+            return str(dst)
+        except OSError as e:
+            log.warning(f"Не удалось переименовать {src} → {dst}: {e}")
+            return run_dir
