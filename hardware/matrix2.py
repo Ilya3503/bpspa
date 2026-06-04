@@ -16,7 +16,7 @@ def main():
     config = rs.config()
 
     # Включаем цветной поток (RGB)
-    config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
+    config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 6)
     # Можно включить глубину, если понадобится позже:
     # config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
 
