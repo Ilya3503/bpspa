@@ -251,7 +251,10 @@ async function refreshPlyList() {
     for (const name of j.files) {
       const opt = document.createElement('option');
       opt.value = `${f}/${name}`;
-      opt.textContent = opt.value;
+      const slash = name.lastIndexOf('/');
+      opt.textContent = slash === -1
+        ? `${f}/${name}`
+        : `${f} ▸ ${name.slice(0, slash)} ▸ ${name.slice(slash + 1)}`;
       plySelect.appendChild(opt);
     }
   }

@@ -163,7 +163,9 @@ def create_app() -> FastAPI:
         p = Path(folder)
         if not p.exists():
             return {"files": []}
-        return {"files": sorted([f.name for f in p.glob("*.ply")])}
+        pattern = "**/*.ply" if folder == "results" else "*.ply"
+        files = sorted(str(f.relative_to(p)) for f in p.glob(pattern))
+        return {"files": files}
 
     @app.get("/file/{path:path}")
     async def get_file(path: str):
