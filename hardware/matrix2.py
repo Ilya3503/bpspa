@@ -38,7 +38,7 @@ def main():
     # ==================== RealSense ====================
     pipeline = rs.pipeline()
     config = rs.config()
-    config.enable_stream(rs.stream.color, WIDTH, HEIGHT, rs.format.bgr8, 30)
+    config.enable_stream(rs.stream.color, WIDTH, HEIGHT, rs.format.bgr8, 6)
 
     print("Запуск Intel RealSense D415...")
     try:
