@@ -63,7 +63,7 @@ def get_realsense_intrinsics():
 def calibrate_camera_to_table():
     camera_matrix, dist_coeffs = get_realsense_intrinsics()
     aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
-    parameters = aruco.DetectorParameters_create()
+    parameters = aruco.DetectorParameters()
 
     pipeline = rs.pipeline()
     config = rs.config()
