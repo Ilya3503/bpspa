@@ -116,6 +116,7 @@ def calibrate_camera_to_table():
                     key = cv2.waitKey(1)
                     if key == ord('s'):
                         np.save("T_cam_to_table.npy", T)
+                        np.savetxt("T_cam_to_table.txt", T, fmt="%.6f")
                         print("\nМатрица сохранена в T_cam_to_table.npy")
                         print(T)
                     if key == ord('q'):
