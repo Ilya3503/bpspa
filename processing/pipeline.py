@@ -26,6 +26,49 @@ _FPFH_CACHE = {
     "cad_fpfh": None,        # FPFH-фичи CAD
 }
 
+# Матрица перевода координат камеры → координаты стола.
+# Применяется к позам перед записью в position.json.
+_CAM_TO_TABLE_PATH = Path("hardware") / "T_cam_to_table.npy"
+
+
+def load_cam_to_table(path: Path = _CAM_TO_TABLE_PATH) -> Optional[np.ndarray]:
+    """
+    Грузит 4x4 матрицу cam->table из .npy. Возвращает float64 (4,4) или None,
+    если файл отсутствует/некорректен (тогда трансформация не применяется).
+    """
+    if not path.exists():
+        log.warning(f"[cam->table] матрица не найдена: {path}. Координаты останутся в системе камеры.")
+        return None
+    try:
+        T = np.load(str(path)).astype(np.float64)
+    except Exception as e:
+        log.error(f"[cam->table] не удалось загрузить {path}: {e}. Координаты останутся в системе камеры.")
+        return None
+    if T.shape != (4, 4):
+        log.error(f"[cam->table] матрица не 4x4: {T.shape}. Координаты останутся в системе камеры.")
+        return None
+    return T
+
+
+def _apply_cam_to_table_to_pose(pose: dict, T_table: np.ndarray) -> None:
+    """
+    Трансформирует одну позу (in-place) из координат камеры в координаты стола.
+    Обновляет transformation / position / orientation.
+    """
+    if "transformation" in pose and pose["transformation"] is not None:
+        T_pose = np.array(pose["transformation"], dtype=np.float64)
+        T_new = T_table @ T_pose
+        pose["transformation"] = T_new.tolist()
+        pose["position"] = T_new[:3, 3].tolist()
+        pose["orientation"] = rotation_to_quat(T_new[:3, :3])
+    elif "position" in pose and pose["position"] is not None:
+        # Поза без полной матрицы (например obb_fallback): двигаем точку и крутим ориентацию.
+        p = np.array(pose["position"], dtype=np.float64)
+        p_h = np.append(p, 1.0)
+        pose["position"] = (T_table @ p_h)[:3].tolist()
+        # orientation тут оставляем как есть, если её нельзя согласованно пересчитать
+        # без матрицы вращения. (R_table @ R_pose требует R_pose, которой в таком pose нет.)
+
 
 # ==============================================================================
 # ЗАГРУЗКА / СОХРАНЕНИЕ
@@ -776,6 +819,19 @@ def make_annotated_ply(pcd, clusters, results_dir: str) -> str:
 
 def save_position_json(result: dict, results_dir: str) -> str:
     p = Path(results_dir) / "position.json"
+
+    # Перевод координат камеры → стола перед записью.
+    # Применяем ко всем позам внутри result["clusters"][*]["pose"].
+    T_table = load_cam_to_table()
+    if T_table is not None:
+        for ci in result.get("clusters", []):
+            pose = ci.get("pose")
+            if isinstance(pose, dict):
+                _apply_cam_to_table_to_pose(pose, T_table)
+        result["coords_frame"] = "table"
+    else:
+        result["coords_frame"] = "camera"
+
     def _clean(d):
         if isinstance(d, dict):
             return {k: _clean(v) for k, v in d.items() if k != "cad_points_transformed"}
