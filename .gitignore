@@ -15,7 +15,7 @@ cad_models/
 .cad_models/
 .cad_models
 
-
+*.png
 *.npy
 
 venv/
@@ -27,6 +27,10 @@ results/
 logs/
 T_camB_to_camA.npy
 .DS_Store
+
+hardware/
+.hardware/
+.hardware
 
 # Distribution / packaging
 .Python
