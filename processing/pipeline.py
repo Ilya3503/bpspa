@@ -28,7 +28,7 @@ _FPFH_CACHE = {
 
 # Матрица перевода координат камеры → координаты стола.
 # Применяется к позам перед записью в position.json.
-_CAM_TO_TABLE_PATH = Path("hardware") / "T_cam_to_table.npy"
+_CAM_TO_TABLE_PATH = Path("hardware") / "transform_cam_to_world.npy"
 
 
 def load_cam_to_table(path: Path = _CAM_TO_TABLE_PATH) -> Optional[np.ndarray]:
