@@ -344,7 +344,7 @@ def _icp_loop(src: np.ndarray, tgt: np.ndarray,
         T_step, rmse, fitness = _icp_step(src, tgt, max_correspondence_distance)
         src_h = np.hstack([src, np.ones((len(src), 1))])
         src = (T_step @ src_h.T).T[:, :3]
-        T_total = T_step @ T_total
+        T_total = T_total @ T_step
         if abs(prev_rmse - rmse) < 1e-6:
             break
         prev_rmse = rmse
