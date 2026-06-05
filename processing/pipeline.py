@@ -53,21 +53,33 @@ def load_cam_to_table(path: Path = _CAM_TO_TABLE_PATH) -> Optional[np.ndarray]:
 def _apply_cam_to_table_to_pose(pose: dict, T_table: np.ndarray) -> None:
     """
     Трансформирует одну позу (in-place) из координат камеры в координаты стола.
-    Обновляет transformation / position / orientation.
+
+    ПОЗИЦИЯ считается всегда как умножение ВЕКТОРА position на матрицу:
+        p_table = T_table @ [px, py, pz, 1]
+    Это надёжно и не зависит от того, согласована ли трансляция внутри
+    transformation с фактическим центром объекта (она бывает рассогласована —
+    тогда умножение матрицы давало бы позицию камеры, а не объекта).
+
+    ОРИЕНТАЦИЯ берётся из повёрнутой матрицы R_table @ R_pose, когда есть
+    transformation; поворотная часть надёжна.
     """
-    if "transformation" in pose and pose["transformation"] is not None:
-        T_pose = np.array(pose["transformation"], dtype=np.float64)
-        T_new = T_table @ T_pose
-        pose["transformation"] = T_new.tolist()
-        pose["position"] = T_new[:3, 3].tolist()
-        pose["orientation"] = rotation_to_quat(T_new[:3, :3])
-    elif "position" in pose and pose["position"] is not None:
-        # Поза без полной матрицы (например obb_fallback): двигаем точку и крутим ориентацию.
+    R_table = T_table[:3, :3]
+
+    # 1) Позиция — всегда из вектора position.
+    if pose.get("position") is not None:
         p = np.array(pose["position"], dtype=np.float64)
-        p_h = np.append(p, 1.0)
-        pose["position"] = (T_table @ p_h)[:3].tolist()
-        # orientation тут оставляем как есть, если её нельзя согласованно пересчитать
-        # без матрицы вращения. (R_table @ R_pose требует R_pose, которой в таком pose нет.)
+        pose["position"] = (T_table @ np.append(p, 1.0))[:3].tolist()
+
+    # 2) Ориентация и transformation — если есть полная матрица.
+    if pose.get("transformation") is not None:
+        T_pose = np.array(pose["transformation"], dtype=np.float64)
+        R_new = R_table @ T_pose[:3, :3]
+        pose["orientation"] = rotation_to_quat(R_new)
+        # transformation пересобираем согласованно: поворот R_new + уже посчитанная позиция.
+        T_new = np.eye(4)
+        T_new[:3, :3] = R_new
+        T_new[:3, 3] = np.array(pose["position"], dtype=np.float64)
+        pose["transformation"] = T_new.tolist()
 
 
 # ==============================================================================
