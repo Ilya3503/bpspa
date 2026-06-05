@@ -16,6 +16,8 @@ cad_models/
 .cad_models
 
 
+*.npy
+
 venv/
 __pycache__/
 *.pyc
