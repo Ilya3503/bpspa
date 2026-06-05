@@ -1,140 +1,134 @@
 import cv2
 import numpy as np
 import pyrealsense2 as rs
-import time
+import os
+from datetime import datetime
 
-# ========================= НАСТРОЙКИ =========================
-MARKER_SIZE_MM = 80.0
-TABLE_WIDTH_MM = 600.0
-TABLE_HEIGHT_MM = 400.0
+def rotation_matrix_to_euler(R):
+    sy = np.sqrt(R[0,0]**2 + R[1,0]**2)
+    singular = sy < 1e-6
+    if not singular:
+        roll  = np.arctan2(R[2,1], R[2,2])
+        pitch = np.arctan2(-R[2,0], sy)
+        yaw   = np.arctan2(R[1,0], R[0,0])
+    else:
+        roll  = np.arctan2(-R[1,2], R[1,1])
+        pitch = np.arctan2(-R[2,0], sy)
+        yaw   = 0
+    return np.degrees([roll, pitch, yaw])
 
-# ID маркеров (замени на реальные после первого запуска)
-MARKER_IDS = {
-    "bottom_left":  0,   # ← левый нижний — начало координат
-    "bottom_right": 1,
-    "top_right":    2,
-    "top_left":     3
-}
 
-# ============================================================
+def main():
+    # ==================== НАСТРОЙКИ ====================
+    marker_ids = [0, 1, 2, 3]
+    dist_x = 520.0   # мм
+    dist_y = 320.0   # мм
+    marker_size_mm = 80.0
 
-# Инициализация ArUco
-aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-aruco_params = cv2.aruco.DetectorParameters()
-detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
+    half_x = dist_x / 2
+    half_y = dist_y / 2
 
-# =================== RealSense D415 ===================
-pipeline = rs.pipeline()
-config = rs.config()
-
-config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 6)  # 6 FPS как у тебя
-
-profile = pipeline.start(config)
-
-# Получаем параметры камеры
-intrinsics = profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
-
-print(f"Камера запущена: {intrinsics.width}x{intrinsics.height} @ {intrinsics.fps} FPS")
-
-# Для хранения предыдущей гомографии (стабильность)
-last_homography = None
-last_corners = None
-
-def get_marker_center(corners):
-    return np.mean(corners[0], axis=0)
-
-def detect_and_transform(frame):
-    global last_homography, last_corners
-    
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    corners, ids, _ = detector.detectMarkers(gray)
-    
-    if ids is None or len(ids) < 3:
-        # Если мало маркеров — используем предыдущую трансформацию
-        if last_homography is not None:
-            return frame, last_homography
-        return frame, None
-
-    # Создаём словарь id -> corners
-    marker_dict = {}
-    for i, marker_id in enumerate(ids.flatten()):
-        marker_dict[int(marker_id)] = corners[i]
-
-    # Проверяем наличие ключевых маркеров
-    required = [MARKER_IDS["bottom_left"], MARKER_IDS["bottom_right"],
-                MARKER_IDS["top_right"], MARKER_IDS["top_left"]]
-    
-    if not all(r in marker_dict for r in required):
-        print("⚠️ Не все 4 маркера найдены")
-        return frame, last_homography
-
-    # ==================== Точки в пикселях ====================
-    bl = get_marker_center(marker_dict[MARKER_IDS["bottom_left"]])   # (0, 0)
-    br = get_marker_center(marker_dict[MARKER_IDS["bottom_right"]])  # (600, 0)
-    tr = get_marker_center(marker_dict[MARKER_IDS["top_right"]])     # (600, 400)
-    tl = get_marker_center(marker_dict[MARKER_IDS["top_left"]])      # (0, 400)
-
-    # Точки источника (камера)
-    src_points = np.array([bl, br, tr, tl], dtype=np.float32)
-
-    # Точки назначения (стол в мм)
-    dst_points = np.array([
-        [0, 0],
-        [TABLE_WIDTH_MM, 0],
-        [TABLE_WIDTH_MM, TABLE_HEIGHT_MM],
-        [0, TABLE_HEIGHT_MM]
+    object_points = np.array([
+        [-half_x, -half_y, 0.0],
+        [-half_x,  half_y, 0.0],
+        [ half_x,  half_y, 0.0],
+        [ half_x, -half_y, 0.0]
     ], dtype=np.float32)
 
-    # Вычисляем гомографию
-    H, _ = cv2.findHomography(src_points, dst_points)
-    last_homography = H
-    last_corners = (bl, br, tr, tl)
+    focal = 1450.0   # Подбирай!
 
-    # Визуализация
-    cv2.aruco.drawDetectedMarkers(frame, corners, ids)
-    for pt in [bl, br, tr, tl]:
-        cv2.circle(frame, tuple(pt.astype(int)), 8, (0, 255, 0), -1)
+    # ==================== RealSense ====================
+    pipeline = rs.pipeline()
+    config = rs.config()
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+    pipeline.start(config)
 
-    return frame, H
+    profile = pipeline.get_active_profile()
+    color_profile = profile.get_stream(rs.stream.color)
+    intrinsics = color_profile.as_video_stream_profile().get_intrinsics()
+
+    camera_matrix = np.array([
+        [intrinsics.fx, 0, intrinsics.ppx],
+        [0, intrinsics.fy, intrinsics.ppy],
+        [0, 0, 1]
+    ], dtype=np.float32)
+    dist_coeffs = np.array(intrinsics.coeffs, dtype=np.float32)
+
+    print(f"RealSense подключена. Focal ≈ {intrinsics.fx:.1f}")
+
+    aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
+    detector = cv2.aruco.ArucoDetector(aruco_dict, cv2.aruco.DetectorParameters())
+
+    print("=== РЕАЛ-ТАЙМ КАЛИБРОВКА ===")
+    print("Нажми 's' — сохранить, 'q' — выход")
+
+    try:
+        while True:
+            frames = pipeline.wait_for_frames()
+            color_frame = frames.get_color_frame()
+            if not color_frame:
+                continue
+
+            img = np.asanyarray(color_frame.get_data())
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+            corners, ids, _ = detector.detectMarkers(gray)
+
+            if ids is not None and len(ids) >= 4:
+                detected = {}
+                for i, mid in enumerate(ids.flatten()):
+                    if mid in marker_ids:
+                        idx = marker_ids.index(mid)
+                        detected[idx] = corners[i]
+
+                if len(detected) == 4:
+                    image_points = np.array([
+                        np.mean(detected[0][0], axis=0),
+                        np.mean(detected[1][0], axis=0),
+                        np.mean(detected[2][0], axis=0),
+                        np.mean(detected[3][0], axis=0)
+                    ], dtype=np.float32)
+
+                    success, rvec, tvec = cv2.solvePnP(
+                        object_points, image_points, camera_matrix, dist_coeffs
+                    )
+
+                    if success:
+                        R = cv2.Rodrigues(rvec)[0].T
+                        t = -R @ tvec
+                        pos = t.ravel() * 1000
+                        euler = rotation_matrix_to_euler(R)
+
+                        # Визуализация
+                        cv2.aruco.drawDetectedMarkers(img, corners)
+                        axis = np.float32([[0,0,0], [150,0,0], [0,150,0], [0,0,150]])
+                        imgpts, _ = cv2.projectPoints(axis, rvec, tvec, camera_matrix, dist_coeffs)
+                        imgpts = np.int32(imgpts).reshape(-1, 2)
+                        origin = tuple(imgpts[0])
+
+                        cv2.line(img, origin, tuple(imgpts[1]), (0,0,255), 4)
+                        cv2.line(img, origin, tuple(imgpts[2]), (0,255,0), 4)
+                        cv2.line(img, origin, tuple(imgpts[3]), (255,0,0), 4)
+
+                        cv2.putText(img, f"X={pos[0]:.1f} Y={pos[1]:.1f} Z={pos[2]:.1f} mm",
+                                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255), 2)
+
+                        key = cv2.waitKey(1)
+                        if key == ord('s'):
+                            transform = np.eye(4, dtype=np.float32)
+                            transform[:3,:3] = R
+                            transform[:3,3] = t.ravel()
+                            np.save("calibration/transform_cam_to_world.npy", transform)
+                            print("Матрица сохранена")
+                        if key == ord('q'):
+                            break
+
+            cv2.imshow("Real-time ArUco Calibration", img)
+
+    finally:
+        pipeline.stop()
+        cv2.destroyAllWindows()
 
 
-def pixel_to_table(x, y, H):
-    """Преобразует пиксельные координаты в мм на столе"""
-    if H is None:
-        return None
-    point = np.array([[[x, y]]], dtype=np.float32)
-    table_point = cv2.perspectiveTransform(point, H)
-    return table_point[0][0]
-
-
-# ======================= ГЛАВНЫЙ ЦИКЛ =======================
-try:
-    while True:
-        frames = pipeline.wait_for_frames()
-        color_frame = frames.get_color_frame()
-        if not color_frame:
-            continue
-
-        frame = np.asanyarray(color_frame.get_data())
-
-        processed, homography = detect_and_transform(frame)
-
-        # Пример: клик мышкой → координаты на столе
-        def mouse_callback(event, x, y, flags, param):
-            if event == cv2.EVENT_LBUTTONDOWN and homography is not None:
-                mm = pixel_to_table(x, y, homography)
-                print(f"📍 Пиксель: ({x}, {y}) → Стол: ({mm[0]:.1f}, {mm[1]:.1f}) мм")
-
-        cv2.namedWindow("RealSense + ArUco → Table")
-        cv2.setMouseCallback("RealSense + ArUco → Table", mouse_callback)
-
-        cv2.imshow("RealSense + ArUco → Table", processed)
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-        time.sleep(0.05)  # небольшая задержка при 6 FPS
-
-finally:
-    pipeline.stop()
-    cv2.destroyAllWindows()
+if __name__ == "__main__":
+    main()
