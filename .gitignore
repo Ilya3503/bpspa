@@ -28,9 +28,7 @@ logs/
 T_camB_to_camA.npy
 .DS_Store
 
-hardware/
-.hardware/
-.hardware
+
 
 # Distribution / packaging
 .Python
