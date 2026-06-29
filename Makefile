@@ -1,10 +1,11 @@
-.PHONY: help install run stop restart clean clean-data lint check
+.PHONY: help install run start stop restart status logs clean clean-data check
 
 VENV := venv
 PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 PORT := 8000
 APP := main.py
+SERVICE := bpspa
 
 help:  ## показать список команд
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -16,14 +17,23 @@ $(VENV):  ## создать venv если нет
 install: $(VENV)  ## установить зависимости
 	$(PIP) install -r requirements.txt
 
-run:  ## запустить приложение (foreground)
+run:  ## запустить вручную в foreground (для отладки; сначала сделай make stop)
 	$(PY) $(APP)
 
-stop:  ## остановить процесс на порту
-	-@fuser -k $(PORT)/tcp 2>/dev/null || true
-	@sleep 1
+start:  ## запустить сервис
+	sudo systemctl start $(SERVICE)
 
-restart: stop run  ## перезапустить
+stop:  ## остановить сервис
+	sudo systemctl stop $(SERVICE)
+
+restart:  ## перезапустить сервис
+	sudo systemctl restart $(SERVICE)
+
+status:  ## статус сервиса
+	systemctl status $(SERVICE) --no-pager
+
+logs:  ## live-логи сервиса
+	journalctl -u $(SERVICE) -f
 
 clean:  ## удалить кэши python
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
