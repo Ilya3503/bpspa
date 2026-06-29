@@ -79,17 +79,16 @@ class RealSenseCamera:
             profile = self._pipeline.start(cfg)
             self._align = rs.align(rs.stream.color)
 
-            # === ФИЛЬТРЫ С МИНИМАЛЬНЫМ СГЛАЖИВАНИЕМ ===
+            # === МИНИМАЛЬНОЕ СГЛАЖИВАНИЕ ===
             self._spatial = rs.spatial_filter()
             self._spatial.set_option(rs.option.filter_magnitude, 1)
-            self._spatial.set_option(rs.option.filter_smooth_alpha, 0.1)
-            self._spatial.set_option(rs.option.filter_smooth_delta, 50)
+            self._spatial.set_option(rs.option.filter_smooth_alpha, 0.05)   # очень слабое
 
             self._temporal = rs.temporal_filter()
-            self._temporal.set_option(rs.option.filter_smooth_alpha, 0.1)
+            self._temporal.set_option(rs.option.filter_smooth_alpha, 0.05)
 
             self._hole_filling = rs.hole_filling_filter()
-            self._hole_filling.set_option(rs.option.holes_fill, 0)   # полностью отключаем заполнение дыр
+            self._hole_filling.set_option(rs.option.holes_fill, 0)   # отключено
 
             depth_sensor = profile.get_device().first_depth_sensor()
             self._depth_scale = depth_sensor.get_depth_scale()
@@ -99,7 +98,7 @@ class RealSenseCamera:
                 .get_intrinsics()
             )
 
-            # Дополнительно отключаем параметры, которые могут сглаживать
+            # Безопасное отключение дополнительных параметров
             try:
                 depth_sensor.set_option(rs.option.high_accuracy, 0)
                 depth_sensor.set_option(rs.option.disparity_shift, 0)
