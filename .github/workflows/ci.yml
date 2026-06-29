@@ -1,0 +1,27 @@
+name: CI (проверка)
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установка зависимостей в изолированный venv
+        run: |
+          python3 -m venv /tmp/ci-venv-${{ github.run_id }}
+          /tmp/ci-venv-${{ github.run_id }}/bin/pip install -r requirements.txt
+
+      - name: Проверка синтаксиса
+        run: |
+          /tmp/ci-venv-${{ github.run_id }}/bin/python -m compileall -q api core processing hardware robot main.py
+
+      - name: Проверка импортов
+        run: |
+          /tmp/ci-venv-${{ github.run_id }}/bin/python -c "import main"
+
+      - name: Уборка
+        if: always()
+        run: rm -rf /tmp/ci-venv-${{ github.run_id }}

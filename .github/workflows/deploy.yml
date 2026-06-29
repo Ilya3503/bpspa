@@ -1,0 +1,43 @@
+name: Deploy (main)
+on:
+  push:
+    branches: [main]
+
+# не дать двум деплоям пересечься
+concurrency:
+  group: deploy-bpspa
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Обновить код в боевой папке
+        run: |
+          cd /path/to/bpspa
+          git fetch origin main
+          git reset --hard origin/main
+
+      - name: Обновить зависимости
+        run: |
+          cd /path/to/bpspa
+          venv/bin/pip install -r requirements.txt
+
+      - name: Перезапустить сервис
+        run: sudo systemctl restart bpspa
+
+      - name: Подождать и проверить здоровье
+        run: |
+          sleep 5
+          for i in $(seq 1 6); do
+            if curl -fsS http://localhost:8000/viewer > /dev/null; then
+              echo "✅ Сервис поднялся и отвечает на /viewer"
+              exit 0
+            fi
+            echo "Попытка $i: сервис ещё не готов, жду..."
+            sleep 3
+          done
+          echo "❌ Сервис не ответил за отведённое время"
+          echo "--- последние логи ---"
+          sudo systemctl status bpspa --no-pager || true
+          exit 1
