@@ -78,9 +78,11 @@ class RealSenseCamera:
 
             profile = self._pipeline.start(cfg)
             self._align = rs.align(rs.stream.color)
-            self._spatial = rs.spatial_filter()
-            self._temporal = rs.temporal_filter()
-            self._hole_filling = rs.hole_filling_filter()
+
+            # === ФИЛЬТРЫ ОТКЛЮЧЕНЫ ===
+            self._spatial = None
+            self._temporal = None
+            self._hole_filling = None
 
             depth_sensor = profile.get_device().first_depth_sensor()
             self._depth_scale = depth_sensor.get_depth_scale()
@@ -90,8 +92,15 @@ class RealSenseCamera:
                 .get_intrinsics()
             )
 
+            # Дополнительно отключаем
+            try:
+                depth_sensor.set_option(rs.option.high_accuracy, 0)
+                depth_sensor.set_option(rs.option.disparity_shift, 0)
+            except:
+                pass
+
             self._running = True
-            log.info(f"Камера запущена: {self.width}x{self.height}@{self.fps}fps, depth_scale={self._depth_scale}")
+            log.info(f"Камера запущена: {self.width}x{self.height}@{self.fps}fps, depth_scale={self._depth_scale} (фильтры отключены)")
         except Exception as e:
             log.error(f"Не удалось запустить камеру: {e}. Переход в режим заглушки.")
             self._stub = True
@@ -140,9 +149,7 @@ class RealSenseCamera:
                     return None
 
                 # фильтры глубины
-                depth_frame = self._spatial.process(depth_frame)
-                depth_frame = self._temporal.process(depth_frame)
-                depth_frame = self._hole_filling.process(depth_frame)
+                pass
 
                 depth = np.asanyarray(depth_frame.get_data())
                 color = np.asanyarray(color_frame.get_data())
