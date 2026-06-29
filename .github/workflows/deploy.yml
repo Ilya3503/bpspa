@@ -14,13 +14,13 @@ jobs:
     steps:
       - name: Обновить код в боевой папке
         run: |
-          cd /path/to/bpspa
+          cd /opt/workspaces/bspa/bpspa
           git fetch origin main
           git reset --hard origin/main
 
       - name: Обновить зависимости
         run: |
-          cd /path/to/bpspa
+          cd /opt/workspaces/bspa/bpspa
           venv/bin/pip install -r requirements.txt
 
       - name: Перезапустить сервис
@@ -28,7 +28,7 @@ jobs:
 
       - name: Подождать и проверить здоровье
         run: |
-          sleep 5
+          sleep 10
           for i in $(seq 1 6); do
             if curl -fsS http://localhost:8000/viewer > /dev/null; then
               echo "✅ Сервис поднялся и отвечает на /viewer"
