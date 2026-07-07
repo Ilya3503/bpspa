@@ -29,18 +29,18 @@ def main():
         depth_frame = frames.get_depth_frame()
         print(f"[OK] Получен depth frame: {depth_frame.get_width()}x{depth_frame.get_height()}")
 
-        # === Генерация облака точек ===
+        # Генерация облака точек
         pc_filter = PointCloudFilter()
         point_cloud = pc_filter.process(frames)
 
-        # === Сохранение с помощью встроенной функции ===
+        # === Сохранение ===
         PROJECT_ROOT = Path(__file__).resolve().parents[2]
         OUTPUT_DIR = PROJECT_ROOT / "data"
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
         filename = str(OUTPUT_DIR / f"orbbec_{int(time.time())}.ply")
 
-        save_point_cloud_to_ply(point_cloud, filename)
+        save_point_cloud_to_ply(filename, point_cloud)   # ← правильный порядок аргументов
         print(f"\n[ГОТОВО] Облако точек сохранено: {filename}")
 
     except Exception as e:
