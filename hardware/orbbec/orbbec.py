@@ -1,5 +1,6 @@
 from pyorbbecsdk import Pipeline, Config, PointCloudFilter, OBSensorType, save_point_cloud_to_ply
 from pathlib import Path
+from datetime import datetime
 import time
 
 
@@ -33,14 +34,15 @@ def main():
         pc_filter = PointCloudFilter()
         point_cloud = pc_filter.process(frames)
 
-        # === Сохранение ===
+        # === Сохранение с красивым именем ===
         PROJECT_ROOT = Path(__file__).resolve().parents[2]
         OUTPUT_DIR = PROJECT_ROOT / "data"
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-        filename = str(OUTPUT_DIR / f"orbbec_{int(time.time())}.ply")
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = str(OUTPUT_DIR / f"orbbec_{timestamp}.ply")
 
-        save_point_cloud_to_ply(filename, point_cloud)   # ← правильный порядок аргументов
+        save_point_cloud_to_ply(filename, point_cloud)
         print(f"\n[ГОТОВО] Облако точек сохранено: {filename}")
 
     except Exception as e:
