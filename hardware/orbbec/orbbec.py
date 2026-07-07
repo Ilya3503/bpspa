@@ -1,6 +1,6 @@
 from pyorbbecsdk import (
     Pipeline, Config, PointCloudFilter, OBSensorType,
-    AlignFilter, OBAlignMode, save_point_cloud_to_ply
+    AlignFilter, OBStreamType, save_point_cloud_to_ply
 )
 from pathlib import Path
 from datetime import datetime
@@ -13,7 +13,6 @@ def main():
     config = Config()
 
     try:
-        # Включаем оба потока
         config.enable_stream(OBSensorType.DEPTH_SENSOR)
         config.enable_stream(OBSensorType.COLOR_SENSOR)
 
@@ -25,8 +24,8 @@ def main():
             print("[ОШИБКА] Не удалось получить кадры")
             return
 
-        # === Alignment (Hardware Mode — лучший вариант) ===
-        align = AlignFilter(OBAlignMode.HW_MODE)
+        # === Alignment: выравниваем Depth к Color ===
+        align = AlignFilter(OBStreamType.COLOR)
         aligned_frames = align.process(frames)
 
         # === Генерация цветного облака точек ===
