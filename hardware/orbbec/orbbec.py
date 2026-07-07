@@ -12,13 +12,11 @@ def main():
     config = Config()
 
     try:
-        # Включаем поток глубины
         config.enable_stream(OBSensorType.DEPTH_SENSOR)
-
         pipeline.start(config)
         print("[OK] Камера успешно запущена\n")
 
-        # Ждём валидный depth frame
+        # Ждём depth frame
         frames = None
         depth_frame = None
 
@@ -34,7 +32,7 @@ def main():
             print("[ОШИБКА] Не удалось получить depth frame")
             return
 
-        print(f"[OK] Получен depth frame: {depth_frame.width}x{depth_frame.height}")
+        print(f"[OK] Получен depth frame: {depth_frame.get_width()}x{depth_frame.get_height()}")
 
         # Генерация облака точек
         pc_filter = PointCloudFilter()
@@ -47,7 +45,7 @@ def main():
             print("[ПРЕДУПРЕЖДЕНИЕ] Облако точек пустое")
             return
 
-        # === Сохранение в папку data/ ===
+        # Сохранение в data/
         PROJECT_ROOT = Path(__file__).resolve().parents[2]
         OUTPUT_DIR = PROJECT_ROOT / "data"
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
