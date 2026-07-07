@@ -1,19 +1,17 @@
 from pyorbbecsdk import (
-    Pipeline, Config, PointCloudFilter, OBSensorType,
-    AlignFilter, OBStreamType, save_point_cloud_to_ply
+    Pipeline, Config, PointCloudFilter, OBSensorType, save_point_cloud_to_ply
 )
 from pathlib import Path
 from datetime import datetime
 
 
 def main():
-    print("=== Orbbec Femto Bolt — Цветное облако точек ===\n")
+    print("=== Orbbec Femto Bolt — Цветное облако точек (тест без alignment) ===\n")
 
     pipeline = Pipeline()
     config = Config()
 
     try:
-        # Включаем оба потока
         config.enable_stream(OBSensorType.DEPTH_SENSOR)
         config.enable_stream(OBSensorType.COLOR_SENSOR)
 
@@ -25,15 +23,11 @@ def main():
             print("[ОШИБКА] Не удалось получить кадры")
             return
 
-        # === Alignment: выравниваем Depth к Color ===
-        align = AlignFilter(OBStreamType.COLOR_STREAM)
-        aligned_frames = align.process(frames)
-
-        # === Генерация цветного облака точек ===
+        # Пробуем сгенерировать облако без alignment
         pc_filter = PointCloudFilter()
-        point_cloud = pc_filter.process(aligned_frames)
+        point_cloud = pc_filter.process(frames)
 
-        # === Сохранение ===
+        # Сохранение
         PROJECT_ROOT = Path(__file__).resolve().parents[2]
         OUTPUT_DIR = PROJECT_ROOT / "data"
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -42,7 +36,7 @@ def main():
         filename = str(OUTPUT_DIR / f"orbbec_color_{timestamp}.ply")
 
         save_point_cloud_to_ply(filename, point_cloud)
-        print(f"[ГОТОВО] Цветное облако точек сохранено: {filename}")
+        print(f"[ГОТОВО] Файл сохранён: {filename}")
 
     except Exception as e:
         print(f"[ОШИБКА] {e}")
