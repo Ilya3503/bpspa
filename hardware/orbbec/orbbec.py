@@ -1,8 +1,6 @@
-from pyorbbecsdk import Pipeline, Config, PointCloudFilter, OBSensorType
+from pyorbbecsdk import Pipeline, Config, PointCloudFilter, OBSensorType, save_point_cloud_to_ply
 from pathlib import Path
 import time
-import numpy as np
-import open3d as o3d
 
 
 def main():
@@ -18,44 +16,31 @@ def main():
 
         # Ждём depth frame
         frames = None
-        depth_frame = None
-
         for attempt in range(10):
             frames = pipeline.wait_for_frames(500)
-            if frames is not None:
-                depth_frame = frames.get_depth_frame()
-                if depth_frame is not None:
-                    break
+            if frames is not None and frames.get_depth_frame() is not None:
+                break
             print(f"  Попытка {attempt + 1}/10...")
 
-        if depth_frame is None:
+        if frames is None or frames.get_depth_frame() is None:
             print("[ОШИБКА] Не удалось получить depth frame")
             return
 
+        depth_frame = frames.get_depth_frame()
         print(f"[OK] Получен depth frame: {depth_frame.get_width()}x{depth_frame.get_height()}")
 
-        # Генерация облака точек
+        # === Генерация облака точек ===
         pc_filter = PointCloudFilter()
         point_cloud = pc_filter.process(frames)
 
-        points = np.asarray(point_cloud.get_points())
-        print(f"[OK] Количество точек: {len(points)}")
-
-        if len(points) == 0:
-            print("[ПРЕДУПРЕЖДЕНИЕ] Облако точек пустое")
-            return
-
-        # Сохранение в data/
+        # === Сохранение с помощью встроенной функции ===
         PROJECT_ROOT = Path(__file__).resolve().parents[2]
         OUTPUT_DIR = PROJECT_ROOT / "data"
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-        filename = OUTPUT_DIR / f"orbbec_{int(time.time())}.ply"
+        filename = str(OUTPUT_DIR / f"orbbec_{int(time.time())}.ply")
 
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(points)
-
-        o3d.io.write_point_cloud(str(filename), pcd)
+        save_point_cloud_to_ply(point_cloud, filename)
         print(f"\n[ГОТОВО] Облако точек сохранено: {filename}")
 
     except Exception as e:
