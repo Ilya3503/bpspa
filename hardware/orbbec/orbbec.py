@@ -1,33 +1,38 @@
-from pyorbbecsdk import Pipeline, Config, OBSensorType, PointCloudFilter
+from pyorbbecsdk import Pipeline, Config, PointCloudFilter
+from pyorbbecsdk.ob import SensorType
 from pathlib import Path
 import time
 import numpy as np
 import open3d as o3d
 
+
 def main():
-    print("=== Orbbec Femto Bolt - Получение облака точек ===\n")
+    print("=== Orbbec Femto Bolt — Получение облака точек ===\n")
 
     pipeline = Pipeline()
     config = Config()
 
     try:
-        # === Включаем поток глубины ===
-        config.enable_stream(OBSensorType.DEPTH)
-        # При желании можно включить и цвет:
-        # config.enable_stream(OBSensorType.COLOR)
+        # Включаем поток глубины
+        config.enable_stream(SensorType.DEPTH)
 
         pipeline.start(config)
-        print("[OK] Камера запущена с потоком Depth\n")
+        print("[OK] Камера успешно запущена\n")
 
-        # Ждём кадры
-        frames = pipeline.wait_for_frames(3000)
-        if frames is None:
-            print("[ОШИБКА] Не удалось получить кадры")
-            return
+        # === Ждём валидный depth frame (максимум 10 попыток) ===
+        frames = None
+        depth_frame = None
 
-        depth_frame = frames.get_depth_frame()
+        for attempt in range(10):
+            frames = pipeline.wait_for_frames(500)
+            if frames is not None:
+                depth_frame = frames.get_depth_frame()
+                if depth_frame is not None:
+                    break
+            print(f"  Попытка {attempt + 1}/10...")
+
         if depth_frame is None:
-            print("[ОШИБКА] Depth frame отсутствует")
+            print("[ОШИБКА] Не удалось получить depth frame")
             return
 
         print(f"[OK] Получен depth frame: {depth_frame.width}x{depth_frame.height}")
@@ -37,13 +42,13 @@ def main():
         point_cloud = pc_filter.process(frames)
 
         points = np.asarray(point_cloud.get_points())
-        print(f"[OK] Точек в облаке: {len(points)}")
+        print(f"[OK] Количество точек: {len(points)}")
 
         if len(points) == 0:
-            print("[ПРЕДУПРЕЖДЕНИЕ] Облако пустое")
+            print("[ПРЕДУПРЕЖДЕНИЕ] Облако точек пустое")
             return
 
-        # === Сохранение ===
+        # === Сохранение в папку data/ (в корне проекта) ===
         PROJECT_ROOT = Path(__file__).resolve().parents[2]
         OUTPUT_DIR = PROJECT_ROOT / "data"
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
