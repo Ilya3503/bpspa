@@ -20,14 +20,13 @@ def main():
         pipeline.start(config)
         print("[OK] Камера запущена (Depth + Color)\n")
 
-        # Получаем кадры
         frames = pipeline.wait_for_frames(3000)
         if frames is None:
             print("[ОШИБКА] Не удалось получить кадры")
             return
 
-        # === Alignment (Depth → Color) ===
-        align = AlignFilter(OBAlignMode.ALIGN_D2C)
+        # === Alignment (Hardware Mode — лучший вариант) ===
+        align = AlignFilter(OBAlignMode.HW_MODE)
         aligned_frames = align.process(frames)
 
         # === Генерация цветного облака точек ===
