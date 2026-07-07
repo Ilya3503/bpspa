@@ -13,6 +13,7 @@ def main():
     config = Config()
 
     try:
+        # Включаем оба потока
         config.enable_stream(OBSensorType.DEPTH_SENSOR)
         config.enable_stream(OBSensorType.COLOR_SENSOR)
 
@@ -25,7 +26,7 @@ def main():
             return
 
         # === Alignment: выравниваем Depth к Color ===
-        align = AlignFilter(OBStreamType.COLOR)
+        align = AlignFilter(OBStreamType.COLOR_STREAM)
         aligned_frames = align.process(frames)
 
         # === Генерация цветного облака точек ===
