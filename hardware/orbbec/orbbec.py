@@ -1,5 +1,4 @@
-from pyorbbecsdk import Pipeline, Config, PointCloudFilter
-from pyorbbecsdk.ob import SensorType
+from pyorbbecsdk import Pipeline, Config, PointCloudFilter, OBSensorType
 from pathlib import Path
 import time
 import numpy as np
@@ -14,12 +13,12 @@ def main():
 
     try:
         # Включаем поток глубины
-        config.enable_stream(SensorType.DEPTH)
+        config.enable_stream(OBSensorType.DEPTH_SENSOR)
 
         pipeline.start(config)
         print("[OK] Камера успешно запущена\n")
 
-        # === Ждём валидный depth frame (максимум 10 попыток) ===
+        # Ждём валидный depth frame
         frames = None
         depth_frame = None
 
@@ -37,7 +36,7 @@ def main():
 
         print(f"[OK] Получен depth frame: {depth_frame.width}x{depth_frame.height}")
 
-        # === Генерация облака точек ===
+        # Генерация облака точек
         pc_filter = PointCloudFilter()
         point_cloud = pc_filter.process(frames)
 
@@ -48,7 +47,7 @@ def main():
             print("[ПРЕДУПРЕЖДЕНИЕ] Облако точек пустое")
             return
 
-        # === Сохранение в папку data/ (в корне проекта) ===
+        # === Сохранение в папку data/ ===
         PROJECT_ROOT = Path(__file__).resolve().parents[2]
         OUTPUT_DIR = PROJECT_ROOT / "data"
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
