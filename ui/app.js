@@ -11,6 +11,37 @@ const cadSelect = $('cad-select');
 const plySelect = $('ply-select');
 const showCadCb = $('show-cad');
 const cadOpacity = $('cad-opacity');
+const btnCamera = $('btn-camera');
+let cameraActive = null;
+const CAMERA_LABELS = { realsense: 'RealSense', orbbec: 'Orbbec' };
+
+async function refreshCamera() {
+  try {
+    const r = await fetch('/camera');
+    const j = await r.json();
+    cameraActive = j.active;
+    btnCamera.textContent = 'Камера: ' + (CAMERA_LABELS[j.active] || j.active);
+  } catch (e) { /* игнор */ }
+}
+
+btnCamera.onclick = async () => {
+  const next = cameraActive === 'orbbec' ? 'realsense' : 'orbbec';
+  const r = await fetch('/camera/select', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ backend: next })
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    log(`Смена камеры отклонена: ${t}`, 'error');
+    return;
+  }
+  const j = await r.json();
+  cameraActive = j.active;
+  btnCamera.textContent = 'Камера: ' + (CAMERA_LABELS[j.active] || j.active);
+  log(`Камера: ${CAMERA_LABELS[j.active] || j.active}`, 'ok');
+};
+refreshCamera();
 
 // ---------- Three.js ----------
 const viewer = $('viewer');
@@ -141,6 +172,12 @@ function handleEvent(ev) {
 
     case 'cad_selected':
       log(`CAD выбрана: ${ev.name}`, 'ok');
+      break;
+
+    case 'camera_changed':
+      cameraActive = ev.active;
+      btnCamera.textContent = 'Камера: ' + (CAMERA_LABELS[ev.active] || ev.active);
+      log(`Камера: ${CAMERA_LABELS[ev.active] || ev.active}`, 'ok');
       break;
   }
 }

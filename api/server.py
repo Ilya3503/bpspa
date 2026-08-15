@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from core.state_machine import StateMachine
 from core.orchestrator import Orchestrator
-from hardware.camera import RealSenseCamera
+from hardware.camera_switch import CameraSwitch
 from api.ws_manager import WSManager
 
 log = logging.getLogger(__name__)
@@ -42,6 +42,9 @@ class CommandRequest(BaseModel):
 class CADSelectRequest(BaseModel):
     name: str
 
+class CameraSelectRequest(BaseModel):
+    backend: str   # realsense | orbbec
+
 
 # ---------- сборка приложения ----------
 
@@ -52,7 +55,7 @@ def create_app() -> FastAPI:
 
     # ---- singletons ----
     ws_manager = WSManager()
-    camera = RealSenseCamera(config)
+    camera = CameraSwitch(config)
     sm = StateMachine()
     orch = Orchestrator(sm, ws_manager, camera, config)
 
@@ -119,6 +122,24 @@ def create_app() -> FastAPI:
             return {}
         with open(p, "r", encoding="utf-8") as f:
             return json.load(f)
+
+    @app.get("/camera")
+    async def camera_get():
+        return {"active": camera.active_key, "available": camera.available()}
+
+    @app.post("/camera/select")
+    async def camera_select(req: CameraSelectRequest):
+        # переключаемся только в покое, чтобы не оборвать активный цикл
+        if sm.state.value != "IDLE":
+            raise HTTPException(409, "Переключать камеру можно только в состоянии IDLE")
+        try:
+            active = await asyncio.get_event_loop().run_in_executor(
+                None, camera.switch, req.backend
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        await ws_manager.broadcast({"event": "camera_changed", "active": active})
+        return {"ok": True, "active": active}
 
     @app.get("/cad_models")
     async def cad_models():
