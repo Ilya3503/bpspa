@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Конфиг — Bin-Picking</title>
+  <style>
+    body { background:#0a0d12; color:#cdd6e0; font-family:system-ui,sans-serif; margin:0; padding:24px; }
+    h1 { font-size:20px; } h2 { font-size:15px; color:#7fb0ff; margin:20px 0 8px; }
+    .row { display:flex; align-items:center; gap:12px; margin:6px 0; }
+    .row label { flex:0 0 240px; font-size:13px; }
+    .row input[type=number], .row select { background:#141922; color:#cdd6e0; border:1px solid #2a3444; border-radius:6px; padding:5px 8px; width:120px; }
+    .row input[type=range] { flex:1; }
+    .val { flex:0 0 70px; font-size:12px; color:#8fa; text-align:right; }
+    .hot { color:#f0a; font-size:11px; }
+    .bar { position:sticky; top:0; background:#0a0d12; padding:12px 0; display:flex; gap:10px; align-items:center; border-bottom:1px solid #2a3444; }
+    button { background:#1c2636; color:#cdd6e0; border:1px solid #34435a; border-radius:8px; padding:8px 14px; cursor:pointer; }
+    button.primary { background:#2b5cff; border-color:#2b5cff; color:#fff; }
+    button.danger { background:#3a1420; border-color:#7a2540; }
+    #note { background:#141922; color:#cdd6e0; border:1px solid #2a3444; border-radius:6px; padding:8px; width:220px; }
+    #msg { font-size:12px; color:#8fa; }
+  </style>
+</head>
+<body>
+  <h1>Конфигурация системы</h1>
+  <div class="bar">
+    <button class="primary" id="apply">Применить</button>
+    <input id="note" placeholder="пометка для снимка (напр. eps003_хорошо)">
+    <button id="download">Скачать снимок</button>
+    <button class="danger" id="reset">Сброс к default</button>
+    <a href="/viewer" style="margin-left:auto;color:#7fb0ff">← вьювер</a>
+    <span id="msg"></span>
+  </div>
+  <div id="form"></div>
+  <script src="/static/config.js"></script>
+</body>
+</html>

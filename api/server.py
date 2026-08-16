@@ -9,10 +9,11 @@ from typing import Optional
 
 import yaml
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from core import config_store
 from core.state_machine import StateMachine
 from core.orchestrator import Orchestrator
 from hardware.camera_switch import CameraSwitch
@@ -49,7 +50,7 @@ class CameraSelectRequest(BaseModel):
 # ---------- сборка приложения ----------
 
 def create_app() -> FastAPI:
-    config = load_config()
+    config = config_store.load_effective()
 
     app = FastAPI(title="Bin-Picking System", version="1.0")
 
@@ -216,5 +217,53 @@ def create_app() -> FastAPI:
         except Exception as e:
             log.warning(f"WS error: {e}")
             await ws_manager.disconnect(ws)
+
+
+
+
+
+
+
+    class ConfigApply(BaseModel):
+        config: dict
+
+    class Snapshot(BaseModel):
+        config: dict
+        note: str = ""
+
+    @app.get("/config_ui", response_class=HTMLResponse)
+    async def config_ui():
+        f = ui_dir / "config.html"
+        if not f.exists():
+            raise HTTPException(404, "ui/config.html не найден")
+        return FileResponse(str(f))
+
+    @app.get("/config/effective")
+    async def config_effective():
+        return app.state.config
+
+    @app.post("/config/apply")
+    async def config_apply(req: ConfigApply):
+        config_store.save_effective(req.config)
+        app.state.config.clear()
+        app.state.config.update(req.config)  # живой конфиг обновлён на месте
+        await ws_manager.broadcast({"event": "config_changed"})
+        return {"ok": True}
+
+    @app.post("/config/reset")
+    async def config_reset():
+        config_store.reset_local()
+        new_cfg = config_store.load_effective()
+        app.state.config.clear()
+        app.state.config.update(new_cfg)
+        await ws_manager.broadcast({"event": "config_changed"})
+        return {"ok": True, "config": new_cfg}
+
+    @app.post("/config/snapshot")
+    async def config_snapshot(req: Snapshot):
+        name, body = config_store.snapshot_bytes(req.config, req.note)
+        return Response(
+            content=body, media_type="application/x-yaml",
+            headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     return app
