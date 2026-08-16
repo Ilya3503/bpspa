@@ -16,11 +16,7 @@ log = logging.getLogger(__name__)
 
 class State(str, Enum):
     IDLE = "IDLE"
-    CAPTURING_VIEW1 = "CAPTURING_VIEW1"
-    WAITING_VIEW2 = "WAITING_VIEW2"
-    CAPTURING_VIEW2 = "CAPTURING_VIEW2"
     CAPTURING_SINGLE = "CAPTURING_SINGLE"   # для режима одного ракурса
-    MERGING = "MERGING"
     PROCESSING = "PROCESSING"
     EXECUTING = "EXECUTING"
     DONE = "DONE"
@@ -32,7 +28,6 @@ class State(str, Enum):
 # "start" из IDLE ведёт в неопределённое состояние — orchestrator сам выбирает
 # куда переходить (CAPTURING_VIEW1 или CAPTURING_SINGLE) на основе n_views.
 USER_TRANSITIONS = {
-    State.WAITING_VIEW2: {"next_view": State.CAPTURING_VIEW2},
     State.DONE:          {"reset": State.IDLE},
     State.ERROR:         {"reset": State.IDLE},
 }
@@ -70,20 +65,15 @@ class StateMachine:
             return True if action == STOP_COMMAND else (self._state == State.IDLE)
         return action in USER_TRANSITIONS.get(self._state, {})
 
-    def trigger_start(self, n_views: int) -> State:
-        """
-        Команда start. Переводит в CAPTURING_VIEW1 (двух-ракурсный режим)
-        или CAPTURING_SINGLE (одно-ракурсный режим) в зависимости от n_views.
-        Разрешена только из IDLE.
-        """
+    def trigger_start(self) -> State:
+        """Команда start. Переводит IDLE → CAPTURING_SINGLE. Разрешена только из IDLE."""
         if self._state != State.IDLE:
             raise ValueError(
                 f"Команда 'start' недопустима в состоянии {self._state.value}. "
                 f"Разрешена только из IDLE."
             )
-        new_state = State.CAPTURING_VIEW1 if n_views >= 2 else State.CAPTURING_SINGLE
-        log.info(f"USER: {self._state} → {new_state} (start, n_views={n_views})")
-        self._state = new_state
+        log.info(f"USER: {self._state} → {State.CAPTURING_SINGLE} (start)")
+        self._state = State.CAPTURING_SINGLE
         return self._state
 
     def trigger(self, action: str) -> State:

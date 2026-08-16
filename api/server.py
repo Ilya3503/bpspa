@@ -9,7 +9,7 @@ from typing import Optional
 
 import yaml
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 

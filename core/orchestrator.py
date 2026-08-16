@@ -2,9 +2,6 @@
 Координатор: знает, что делать в каждом состоянии.
 Шлёт WebSocket-события на каждом шаге.
 
-Поддерживает два режима съёмки (config.capture.n_views):
-- 1: один снимок, без merge
-- 2 и больше: два снимка с merge между ними
 """
 import asyncio
 import base64
@@ -24,7 +21,7 @@ log = logging.getLogger(__name__)
 
 class Orchestrator:
     """
-    Принимает команды (start/next_view/reset/stop) и продвигает state machine.
+    Принимает команды (start/reset/stop) и продвигает state machine.
     Тяжёлые синхронные операции (камера, обработка) выполняются в threadpool.
     """
 
@@ -35,11 +32,6 @@ class Orchestrator:
         self.camera = camera
         self.config = config
         self._busy = asyncio.Lock()
-
-    @property
-    def n_views(self) -> int:
-        """Текущее число ракурсов из конфига. Читаем динамически — позволяет менять без рестарта."""
-        return int(self.config.get("capture", {}).get("n_views", 2))
 
     # ---------------- публичный API ----------------
 
@@ -58,19 +50,9 @@ class Orchestrator:
             if self._busy.locked():
                 await self.ws.broadcast({"event": "error", "message": "Уже идёт цикл"})
                 return
-            n = self.n_views
-            self.sm.trigger_start(n_views=n)
+            self.sm.trigger_start()
             await self._emit_state()
-            if n >= 2:
-                asyncio.create_task(self._run_two_view_cycle_first_half())
-            else:
-                asyncio.create_task(self._run_single_view_cycle())
-            return
-
-        if action == "next_view":
-            self.sm.trigger("next_view")
-            await self._emit_state()
-            asyncio.create_task(self._run_two_view_cycle_second_half())
+            asyncio.create_task(self._run_single_view_cycle())
             return
 
         raise ValueError(f"Неизвестная команда: {action}")
@@ -100,107 +82,25 @@ class Orchestrator:
                 await self.ws.broadcast({"event": "error", "message": str(e)})
                 await self._emit_state()
 
-    async def _run_two_view_cycle_first_half(self):
-        """Двух-ракурсный режим, часть 1: захват view1 → ждём next_view."""
-        async with self._busy:
-            try:
-                await self._step_capture(view=1)
-                self.sm.advance(State.WAITING_VIEW2)
-                await self._emit_state()
-                await self.ws.broadcast({
-                    "event": "waiting_for_next_view",
-                    "message": "Переставьте камеру и нажмите NEXT"
-                })
-            except Exception as e:
-                log.exception("Ошибка в _run_two_view_cycle_first_half")
-                self.sm.fail(str(e))
-                await self.ws.broadcast({"event": "error", "message": str(e)})
-                await self._emit_state()
-
-    async def _run_two_view_cycle_second_half(self):
-        """Двух-ракурсный режим, часть 2: захват view2 → merge → process → execute → done."""
-        async with self._busy:
-            try:
-                await self._step_capture(view=2)
-                self.sm.advance(State.MERGING)
-                await self._emit_state()
-
-                merged_file = await self._step_merge()
-                self.sm.advance(State.PROCESSING)
-                await self._emit_state()
-
-                result = await self._step_process(merged_file)
-                self.sm.set_data(last_result=result)
-                self.sm.advance(State.EXECUTING)
-                await self._emit_state()
-
-                await self._step_execute(result)
-                self.sm.advance(State.DONE)
-                await self._emit_state()
-                await self.ws.broadcast({"event": "done", "result_file": "results/position.json"})
-            except Exception as e:
-                log.exception("Ошибка в _run_two_view_cycle_second_half")
-                self.sm.fail(str(e))
-                await self.ws.broadcast({"event": "error", "message": str(e)})
-                await self._emit_state()
-
     # ---------------- шаги ----------------
 
-    async def _step_capture(self, view: int, single_mode: bool = False) -> str:
-        await self.ws.broadcast({"event": "capture_start", "view": view, "single_mode": single_mode})
+    async def _step_capture(self) -> str:
+        await self.ws.broadcast({"event": "capture_start"})
         loop = asyncio.get_event_loop()
         filepath = await loop.run_in_executor(None, self.camera.capture_pointcloud, "data")
         if filepath is None:
-            raise RuntimeError(f"Не удалось захватить view {view}")
+            raise RuntimeError("Не удалось захватить облако")
         pcd = pl.load_pcd(filepath)
         points = len(pcd.points)
 
-        if single_mode:
-            self.sm.set_data(file_single=filepath)
-        elif view == 1:
-            self.sm.set_data(file_view1=filepath)
-        else:
-            self.sm.set_data(file_view2=filepath)
+        self.sm.set_data(file_single=filepath)
 
         await self.ws.broadcast({
             "event": "capture_done",
-            "view": view,
-            "single_mode": single_mode,
             "file": filepath,
             "points": points,
         })
         return filepath
-
-    async def _step_merge(self) -> str:
-        data = self.sm.data
-        file_a = data.get("file_view1")
-        file_b = data.get("file_view2")
-        if not file_a or not file_b:
-            raise RuntimeError("Не хватает файлов для merge")
-
-        await self.ws.broadcast({"event": "merging_start", "files": [file_a, file_b]})
-
-        cfg = self.config["merge"]
-        T, is_stub = pl.load_calibration_matrix(cfg["calibration_file"])
-
-        loop = asyncio.get_event_loop()
-        merged = await loop.run_in_executor(
-            None,
-            lambda: pl.merge_two_clouds(
-                file_a, file_b, T,
-                output_dir="data",
-                voxel_size=cfg.get("voxel_size", 0.005)
-            )
-        )
-        pcd = pl.load_pcd(merged)
-        await self.ws.broadcast({
-            "event": "merging_done",
-            "merged_file": merged,
-            "points": len(pcd.points),
-            "calibration_is_stub": is_stub,
-        })
-        self.sm.set_data(merged_file=merged)
-        return merged
 
     async def _step_process(self, input_file: str) -> dict:
         loop = asyncio.get_event_loop()
@@ -263,11 +163,6 @@ class Orchestrator:
                 cad_model = pl.load_pcd(str(cad_path))
             else:
                 log.warning(f"CAD не найден: {cad_path}")
-
-        # Развилка: iterative FPFH+RANSAC по всему облаку, или DBSCAN+ICP по кластерам
-        iter_cfg = cfg.get("iterative_match", {})
-        if iter_cfg.get("enabled", False) and cad_name:
-            return self._process_iterative(pcd, cad_name, icp_cfg, global_cfg, iter_cfg, emit, plane_model, input_file)
 
         clusters = pl.cluster_dbscan(
             pcd,
@@ -340,106 +235,6 @@ class Orchestrator:
             result["annotated_ply"] = pl.make_annotated_ply(pcd, clusters, run_dir)
         pl.save_position_json(result, run_dir)
         self._finalize_run_dir(run_dir, len(clusters))
-        return result
-
-    def _process_iterative(self, pcd, cad_name, icp_cfg, global_cfg, iter_cfg, emit, plane_model, input_file):
-        """Альтернативный путь: iterative FPFH+RANSAC без DBSCAN."""
-        cad_path = Path("cad_models") / cad_name
-        run_dir = self._make_run_dir()
-        if not cad_path.exists():
-            raise FileNotFoundError(f"CAD не найден: {cad_path}")
-        cad_model = pl.load_pcd(str(cad_path))
-
-        emit({"event": "iterative_start", "scene_points": len(pcd.points)})
-        poses = pl.run_iterative_global(pcd, cad_model, cad_name, global_cfg, icp_cfg, iter_cfg)
-
-        clusters_info = []
-        for i, pose in enumerate(poses):
-            info = {"id": i, "points_count": None, "extent": pose.get("extent", [])}
-            info["pose"] = {k: v for k, v in pose.items() if k != "cad_points_transformed"}
-
-            emit({
-                "event": "pose_estimated",
-                "cluster_id": i,
-                "method": pose["method"],
-                "fitness": pose.get("fitness"),
-                "inlier_rmse": pose.get("inlier_rmse"),
-                "position": pose["position"],
-                "orientation": pose["orientation"],
-                "global_fitness": pose.get("global_fitness"),
-                "global_rmse": pose.get("global_rmse"),
-            })
-
-            if pose.get("cad_points_transformed") is not None:
-                cad_pts = pose["cad_points_transformed"]
-
-                def _ds_arr(arr, max_n=5000):
-                    if len(arr) > max_n:
-                        step = len(arr) // max_n
-                        return arr[::step][:max_n]
-                    return arr
-
-                emit({
-                    "event": "icp_visualization",
-                    "cluster_id": i,
-                    "cluster_points": _ds_arr(np.asarray(pcd.points)).tolist(),
-                    "cad_points": _ds_arr(cad_pts).tolist(),
-                    "cad_model_name": cad_name,
-                })
-
-            clusters_info.append(info)
-
-        # === PLANAR FALLBACK ===
-        # Запускаем когда основной путь не нашёл годных поз или дал слишком слабые.
-        planar_cfg = self.config.get("planar_fallback", {})
-        if planar_cfg.get("enabled", False):
-            best_fit = max((p.get("fitness") or 0.0) for p in poses) if poses else 0.0
-            trigger = float(planar_cfg.get("trigger_max_fitness", 0.20))
-            if best_fit < trigger:
-                log.info(f"[planar] основной путь слаб (best_fitness={best_fit:.3f} < {trigger}), "
-                         f"запускаю planar_fallback")
-                from processing import regiongrow as rg
-                pts_np = np.asarray(pcd.points, dtype=np.float64)
-                cad_pts_np = np.asarray(cad_model.points, dtype=np.float64)
-                planar_pose = rg.run_planar_fallback(pts_np, cad_pts_np, planar_cfg)
-                if planar_pose is not None:
-                    i = len(poses)
-                    poses.append(planar_pose)
-                    info = {
-                        "id": i,
-                        "points_count": planar_pose.get("region_points_count"),
-                        "extent": planar_pose.get("extent", []),
-                    }
-                    info["pose"] = {k: v for k, v in planar_pose.items()
-                                    if k != "cad_points_transformed"}
-                    clusters_info.append(info)
-                    emit({
-                        "event": "pose_estimated",
-                        "cluster_id": i,
-                        "method": planar_pose["method"],
-                        "fitness": None,
-                        "inlier_rmse": None,
-                        "confidence": planar_pose.get("confidence"),
-                        "position": planar_pose["position"],
-                        "orientation": planar_pose["orientation"],
-                    })
-
-        # === КОНЕЦ PLANAR FALLBACK ===
-        used_planar = any(c.get("pose", {}).get("method") == "planar_fallback" for c in clusters_info)
-        result = {
-            "status": "ok",
-            "input_file": input_file,
-            "num_clusters": len(poses),
-            "clusters": clusters_info,
-            "plane_model": plane_model,
-            "pipeline_mode": "iterative_match+planar" if used_planar else "iterative_match",
-        }
-        if poses:
-            result["annotated_ply"] = pl.make_iterative_annotated_ply(pcd, [
-                {k: v for k, v in p.items() if k != "cad_points_transformed"} for p in poses
-            ], cad_model, run_dir)
-        pl.save_position_json(result, run_dir)
-        self._finalize_run_dir(run_dir, len(poses))
         return result
 
     def _estimate_pose(self, cluster, cad_model, cad_name, icp_cfg, global_cfg, cluster_id):
