@@ -15,6 +15,7 @@ from core.state_machine import StateMachine, State
 from api.ws_manager import WSManager
 from hardware.camera import RealSenseCamera
 from processing import pipeline as pl
+from processing import preprocessing as pre
 
 log = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ class Orchestrator:
         filepath = await loop.run_in_executor(None, self.camera.capture_pointcloud, "data")
         if filepath is None:
             raise RuntimeError("Не удалось захватить облако")
-        pcd = pl.load_pcd(filepath)
+        pcd = pre.load_pcd(filepath)
         points = len(pcd.points)
 
         self.sm.set_data(file_single=filepath)
@@ -112,153 +113,11 @@ class Orchestrator:
         return await loop.run_in_executor(None, _do)
 
     def _process_sync(self, input_file: str, emit) -> dict:
-        """Синхронный pipeline. emit — функция для рассылки событий."""
-        cfg = self.config
+        """Тонкая обёртка: run_dir + вызов фасада pipeline + финализация папки."""
         run_dir = self._make_run_dir()
-        pre = cfg["preprocessing"]
-        plane = cfg["plane_removal"]
-        db = cfg["dbscan"]
-        icp_cfg = cfg["icp"]
-        global_cfg = cfg.get("global_registration", {})
-
-        pcd = pl.load_pcd(input_file)
-        pcd = pl.clean_nan(pcd)
-        n0 = len(pcd.points)
-
-        pcd = pl.crop_roi(pcd, pre["roi"]["x"], pre["roi"]["y"], pre["roi"]["z"])
-        emit({"event": "processing_step", "step": "crop_roi",
-              "points_before": n0, "points_after": len(pcd.points)})
-
-        if len(pcd.points) == 0:
-            return {"status": "empty", "num_clusters": 0, "clusters": []}
-
-        n = len(pcd.points)
-        pcd = pl.voxel_downsample(pcd, pre["voxel_size"])
-        emit({"event": "processing_step", "step": "voxel_downsample",
-              "points_before": n, "points_after": len(pcd.points)})
-
-        n = len(pcd.points)
-        pcd = pl.statistical_filter(pcd, pre["nb_neighbors"], pre["std_ratio"])
-        emit({"event": "processing_step", "step": "statistical_filter",
-              "points_before": n, "points_after": len(pcd.points)})
-
-        plane_model = None
-        if plane.get("enabled", True):
-            n = len(pcd.points)
-            pcd, plane_model = pl.remove_plane(
-                pcd,
-                distance_threshold=plane["distance_threshold"],
-                ransac_n=plane["ransac_n"],
-                num_iterations=plane["num_iterations"],
-            )
-            emit({"event": "processing_step", "step": "ransac_plane",
-                  "points_before": n, "points_after": len(pcd.points)})
-
-        # CAD модель — определяем заранее, нужно для обоих путей обработки
-        cad_model = None
-        cad_name = icp_cfg.get("cad_file")
-        if cad_name:
-            cad_path = Path("cad_models") / cad_name
-            if cad_path.exists():
-                cad_model = pl.load_pcd(str(cad_path))
-            else:
-                log.warning(f"CAD не найден: {cad_path}")
-
-        clusters = pl.cluster_dbscan(
-            pcd,
-            eps=db["eps"],
-            min_points=db["min_points"],
-            min_extent=db["min_extent"],
-            max_extent=db["max_extent"],
-        )
-        emit({
-            "event": "clusters_found",
-            "num_clusters": len(clusters),
-            "clusters": [{"id": i, "points": len(c.points)} for i, c in enumerate(clusters)]
-        })
-
-        Path(run_dir, "clusters").mkdir(parents=True, exist_ok=True)
-        pl.save_clusters(clusters, str(Path(run_dir, "clusters")))
-
-        clusters_info = []
-        for i, cluster in enumerate(clusters):
-            info = pl.cluster_info(cluster, i)
-
-            emit({"event": "pose_estimation_start",
-                  "cluster_id": i,
-                  "cad_model": cad_name if cad_model else None})
-
-            pose = self._estimate_pose(cluster, cad_model, cad_name, icp_cfg, global_cfg, i)
-
-            emit({
-                "event": "pose_estimated",
-                "cluster_id": i,
-                "method": pose["method"],
-                "fitness": pose.get("fitness"),
-                "inlier_rmse": pose.get("inlier_rmse"),
-                "position": pose["position"],
-                "orientation": pose["orientation"],
-                "global_fitness": pose.get("global_fitness"),
-                "global_rmse": pose.get("global_rmse"),
-            })
-
-            # ICP визуализация (для всех методов, у которых есть cad_points_transformed)
-            if pose.get("cad_points_transformed") is not None:
-                cluster_pts = np.asarray(cluster.points)
-                cad_pts = pose["cad_points_transformed"]
-
-                def _ds_arr(arr, max_n=5000):
-                    if len(arr) > max_n:
-                        step = len(arr) // max_n
-                        return arr[::step][:max_n]
-                    return arr
-
-                emit({
-                    "event": "icp_visualization",
-                    "cluster_id": i,
-                    "cluster_points": _ds_arr(cluster_pts).tolist(),
-                    "cad_points": _ds_arr(cad_pts).tolist(),
-                    "cad_model_name": cad_name,
-                })
-
-            info["pose"] = {k: v for k, v in pose.items() if k != "cad_points_transformed"}
-            clusters_info.append(info)
-
-        result = {
-            "status": "ok",
-            "input_file": input_file,
-            "num_clusters": len(clusters),
-            "clusters": clusters_info,
-            "plane_model": plane_model,
-        }
-        if clusters:
-            result["annotated_ply"] = pl.make_annotated_ply(pcd, clusters, run_dir)
-        pl.save_position_json(result, run_dir)
-        self._finalize_run_dir(run_dir, len(clusters))
+        result = pl.run_pipeline(input_file, self.config, run_dir, emit)
+        self._finalize_run_dir(run_dir, result.get("num_clusters", 0))
         return result
-
-    def _estimate_pose(self, cluster, cad_model, cad_name, icp_cfg, global_cfg, cluster_id):
-        """Выбор метода оценки позы. Изолировано чтобы не загромождать _process_sync."""
-        if cad_model is None:
-            return pl._obb_fallback(cluster, reason="no CAD")
-
-        if global_cfg.get("enabled", False):
-            try:
-                return pl.run_global_then_icp(
-                    cluster, cad_model, cad_name,
-                    global_cfg=global_cfg,
-                    icp_cfg=icp_cfg,
-                )
-            except Exception as e:
-                log.warning(f"Global registration failed for cluster {cluster_id}: {e}. Fallback to ICP.")
-
-        return pl.run_icp(
-            cluster, cad_model,
-            voxel_size=icp_cfg["voxel_size"],
-            max_correspondence_distance=icp_cfg["max_correspondence_distance"],
-            max_iterations=icp_cfg["max_iterations"],
-            fitness_threshold=icp_cfg["fitness_threshold"],
-        )
 
     async def _step_execute(self, result: dict):
         """Симуляция робота. Пока заглушка — реализует напарник в robot/executor.py."""

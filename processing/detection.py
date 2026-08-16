@@ -1,3 +1,9 @@
+import logging
+from typing import List
+import numpy as np
+import open3d as o3d
+log = logging.getLogger(__name__)
+
 
 # ==============================================================================
 # КЛАСТЕРИЗАЦИЯ
