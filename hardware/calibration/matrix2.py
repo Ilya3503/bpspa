@@ -98,7 +98,7 @@ def main():
                         transform[:3, 3] = t_cam_to_world.ravel()
 
                         # === АВТОМАТИЧЕСКОЕ СОХРАНЕНИЕ ===
-                        os.makedirs("calibration", exist_ok=True)
+                        os.makedirs("", exist_ok=True)
                         ts = datetime.now().strftime("%Y%m%d_%H%M")
 
                         np.save("calibration/camera_matrix.npy", camera_matrix)
@@ -107,7 +107,7 @@ def main():
                         np.save("calibration/rvec.npy", rvec)
                         np.save("calibration/tvec.npy", tvec)
 
-                        with open("calibration/README.txt", "w", encoding="utf-8") as f:
+                        with open("README.txt", "w", encoding="utf-8") as f:
                             f.write(f"Calibration {ts}\n")
                             f.write(f"Focal length: {intrinsics.fx:.2f} pixels\n\n")
                             f.write("=== Transform Camera → World ===\n")

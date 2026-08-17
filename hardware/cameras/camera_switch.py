@@ -8,8 +8,8 @@ start / stop / capture_pointcloud / get_color_frame_for_stream.
 import threading
 import logging
 
-from hardware.camera import RealSenseCamera
-from hardware.orbbec_camera import OrbbecCamera
+from hardware.cameras.camera import RealSenseCamera
+from hardware.cameras.orbbec_camera import OrbbecCamera
 
 log = logging.getLogger(__name__)
 

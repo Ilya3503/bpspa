@@ -8,9 +8,6 @@ __pycache__/
 
 config.yaml
 config.local.yaml
-scripts/
-.scripts
-.scripts/
 
 cad_models/
 .cad_models/

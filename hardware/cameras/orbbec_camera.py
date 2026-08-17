@@ -26,7 +26,7 @@ except ImportError:
 class OrbbecCamera:
     def __init__(self, config: dict):
         cap = config.get("capture", {})
-        orb = config.get("orbbec", {})
+        orb = config.get("../orbbec", {})
         self.pixel_crop = cap.get("pixel_crop", {})
         # мм -> м. Femto Bolt (ToF Azure Kinect) отдаёт глубину uint16 в миллиметрах.
         self.depth_scale_to_m = float(orb.get("depth_scale_to_meters", 0.001))

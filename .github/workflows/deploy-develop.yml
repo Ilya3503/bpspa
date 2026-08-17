@@ -1,0 +1,51 @@
+name: Deploy (develop)
+on:
+  push:
+    branches: [develop]
+
+concurrency:
+  group: deploy-jetson        # ОБЩАЯ с prod — не даём деплоям пересечься
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Запомнить текущий коммит (для отката)
+        run: |
+          cd /opt/workspaces/develop_bpspa/develop_bpspa
+          echo "PREV_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+
+      - name: Обновить код develop
+        run: |
+          cd /opt/workspaces/develop_bpspa/develop_bpspa
+          git fetch origin develop
+          git reset --hard origin/develop
+
+      - name: Обновить зависимости (если менялся requirements.txt)
+        run: |
+          cd /opt/workspaces/develop_bpspa/develop_bpspa
+          if git diff --name-only ${{ env.PREV_SHA }} HEAD | grep -q '^requirements.txt$'; then
+            venv/bin/pip install -r requirements.txt
+          else
+            echo "requirements.txt без изменений — пропускаю"
+          fi
+
+      - name: Перезапустить dev-сервис
+        run: sudo systemctl restart bpspa-dev
+
+      - name: Health-check + откат при провале
+        run: |
+          sleep 8
+          for i in $(seq 1 6); do
+            if curl -fsS http://localhost:8001/state > /dev/null; then
+              echo "✅ dev поднялся на :8001"
+              exit 0
+            fi
+            echo "Попытка $i…"; sleep 3
+          done
+          echo "❌ dev не ответил — откат на $PREV_SHA"
+          cd /opt/workspaces/develop_bpspa/develop_bpspa
+          git reset --hard "$PREV_SHA"
+          sudo systemctl restart bpspa-dev
+          exit 1

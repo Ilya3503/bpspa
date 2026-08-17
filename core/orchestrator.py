@@ -9,11 +9,10 @@ import logging
 from pathlib import Path
 
 import cv2
-import numpy as np
 
 from core.state_machine import StateMachine, State
 from api.ws_manager import WSManager
-from hardware.camera import RealSenseCamera
+from hardware.cameras.camera import RealSenseCamera
 from processing import pipeline as pl
 from processing import preprocessing as pre
 
@@ -64,7 +63,7 @@ class Orchestrator:
         """Одно-ракурсный режим: один снимок → processing → execute → done."""
         async with self._busy:
             try:
-                input_file = await self._step_capture(view=1, single_mode=True)
+                input_file = await self._step_capture()
                 self.sm.advance(State.PROCESSING)
                 await self._emit_state()
 

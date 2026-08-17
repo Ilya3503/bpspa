@@ -5,7 +5,6 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, Response
@@ -15,7 +14,7 @@ from pydantic import BaseModel
 from core import config_store
 from core.state_machine import StateMachine
 from core.orchestrator import Orchestrator
-from hardware.camera_switch import CameraSwitch
+from hardware.cameras.camera_switch import CameraSwitch
 from api.ws_manager import WSManager
 
 log = logging.getLogger(__name__)
