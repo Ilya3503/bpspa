@@ -1,0 +1,63 @@
+server:
+  host: 0.0.0.0
+  port: 8000
+
+capture:
+  video_feed_fps: 1
+  width: 1280
+  height: 720
+  fps: 6
+  pixel_crop:
+    left: 300
+    right: 200
+    top: 150
+    bottom: 0
+
+preprocessing:
+  roi:
+    x: [-0.5, 0.5]
+    y: [-0.25, 0.25]
+    z: [0.7, 0.95]
+  voxel_size: 0.002
+  nb_neighbors: 20
+  std_ratio: 2.0
+
+plane_removal:
+  enabled: true
+  distance_threshold: 0.01
+  ransac_n: 3
+  num_iterations: 1000
+
+dbscan:
+  eps: 0.025
+  min_points: 50
+  min_extent: 0.02
+  max_extent: 0.3
+
+global_registration:
+  enabled: true
+  voxel_size: 0.002
+  normal_radius_factor: 2.0
+  fpfh_radius_factor: 5.0
+  fpfh_max_nn: 100
+  ransac_n: 3
+  distance_threshold_factor: 1.5
+  edge_length_threshold: 0.9
+  mutual_filter: true
+  max_iterations: 100000
+  confidence: 0.999
+  min_fitness: 0.1
+
+icp:
+  cad_file: Cube_70x70x70_m.ply
+  voxel_size: 0.002
+  max_correspondence_distance: 0.015
+  max_iterations: 50
+  fitness_threshold: 0.24
+
+robot:
+  enabled: false
+  urdf_path: robot/models/mycobot.urdf
+  use_gui: true
+  grasp_offset_z: 0.05
+  pregrasp_offset_z: 0.12
