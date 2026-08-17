@@ -23,6 +23,7 @@ install: $(VENV)  ## поставить зависимости
 run:  ## запуск с логами в терминале
 	$(PY) $(APP)
 
+
 # --- prod (main, порт 8000) ---
 start:  ## запустить prod в фоне
 	sudo systemctl start $(SERVICE)
