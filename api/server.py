@@ -31,7 +31,6 @@ class CommandRequest(BaseModel):
 class CADSelectRequest(BaseModel):
     name: str
 
-
 class CameraSelectRequest(BaseModel):
     backend: str   # realsense | orbbec
 
