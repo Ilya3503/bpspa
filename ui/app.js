@@ -8,7 +8,6 @@ const stateEl = $('state-value');
 const logEl = $('log');
 const videoEl = $('video-feed');
 const cadSelect = $('cad-select');
-const plySelect = $('ply-select');
 const showCadCb = $('show-cad');
 const cadOpacity = $('cad-opacity');
 const btnCamera = $('btn-camera');
@@ -117,7 +116,7 @@ function handleEvent(ev) {
 
     case 'capture_done':
       log(`Захвачено view ${ev.view}: ${ev.points} точек`, 'ok');
-      refreshPlyList();
+      refreshAllLists();
       break;
 
     case 'waiting_for_next_view':
@@ -131,7 +130,7 @@ function handleEvent(ev) {
     case 'merging_done':
       log(`Merged: ${ev.points} точек`, 'ok');
       if (ev.calibration_is_stub) log('⚠ Используется заглушка калибровки', 'error');
-      refreshPlyList();
+      refreshAllLists();
       break;
 
     case 'processing_step':
@@ -164,6 +163,12 @@ function handleEvent(ev) {
 
     case 'done':
       log('Цикл завершён', 'ok');
+      refreshAnnotList();
+      break;
+
+    case 'capture_only_done':
+      log(`Снято: ${ev.file}`, 'ok');
+      refreshDataList();
       break;
 
     case 'error':
@@ -234,12 +239,12 @@ cadOpacity.addEventListener('input', () => {
 });
 
 // ---------- команды ----------
-async function sendCommand(action) {
+async function sendCommand(action, payload = null) {
   try {
     const r = await fetch('/command', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({action})
+      body: JSON.stringify({action, payload})
     });
     if (!r.ok) {
       const t = await r.text();
@@ -251,6 +256,11 @@ async function sendCommand(action) {
 }
 
 $('btn-start').onclick = () => sendCommand('start');
+$('btn-capture').onclick = () => sendCommand('capture_only');
+$('btn-process').onclick = () => {
+  const path = dataSelect.value;   // выбранный сырой .ply из data (см. задачу 2)
+  if (!path) { log('Выбери облако из data', 'error'); return; }
+  sendCommand('process_file', path);};
 $('btn-next').onclick  = () => sendCommand('next_view');
 $('btn-reset').onclick = () => sendCommand('reset');
 $('btn-stop').onclick  = () => sendCommand('stop');
@@ -279,28 +289,45 @@ $('cad-apply').onclick = async () => {
 refreshCadList();
 
 // ---------- PLY-вьювер: открыть произвольный файл ----------
-async function refreshPlyList() {
-  const folders = ['data', 'results'];
-  plySelect.innerHTML = '';
-  for (const f of folders) {
-    const r = await fetch(`/files/${f}`);
-    const j = await r.json();
-    for (const name of j.files) {
-      const opt = document.createElement('option');
-      opt.value = `${f}/${name}`;
-      const slash = name.lastIndexOf('/');
-      opt.textContent = slash === -1
-        ? `${f}/${name}`
-        : `${f} ▸ ${name.slice(0, slash)} ▸ ${name.slice(slash + 1)}`;
-      plySelect.appendChild(opt);
-    }
+// ---------- раздельные списки: сырые (data) и annotated (results) ----------
+const dataSelect = $('data-select');
+const annotSelect = $('annot-select');
+
+async function refreshDataList() {
+  const r = await fetch('/files/data');
+  const j = await r.json();
+  dataSelect.innerHTML = '';
+  for (const name of j.files) {
+    const opt = document.createElement('option');
+    opt.value = `data/${name}`;
+    opt.textContent = name;
+    dataSelect.appendChild(opt);
   }
 }
-refreshPlyList();
 
-$('ply-load').onclick = () => {
-  const path = plySelect.value;
-  if (!path) return;
+async function refreshAnnotList() {
+  const r = await fetch('/files/results');
+  const j = await r.json();
+  annotSelect.innerHTML = '';
+  // только annotated, без cluster_* и прочего мусора
+  for (const name of j.files.filter(n => n.endsWith('annotated_pointcloud.ply'))) {
+    const opt = document.createElement('option');
+    opt.value = `results/${name}`;
+    // показываем папку прогона, а не полный путь
+    const parts = name.split('/');
+    opt.textContent = parts.length > 1 ? parts[parts.length - 2] : name;
+    annotSelect.appendChild(opt);
+  }
+}
+
+function refreshAllLists() { refreshDataList(); refreshAnnotList(); }
+refreshAllLists();
+
+$('data-load').onclick = () => loadPly(dataSelect.value, 'сырое облако');
+$('annot-load').onclick = () => loadPly(annotSelect.value, 'annotated');
+
+function loadPly(path, label) {
+  if (!path) { log(`Выбери ${label}`, 'error'); return; }
   const loader = new PLYLoader();
   loader.load(`/file/${path}`, geometry => {
     if (currentPly) { scene.remove(currentPly); currentPly.geometry.dispose(); }
@@ -312,7 +339,6 @@ $('ply-load').onclick = () => {
     });
     currentPly = new THREE.Points(geometry, mat);
     scene.add(currentPly);
-
     const box = new THREE.Box3().setFromObject(currentPly);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3()).length();
@@ -321,4 +347,4 @@ $('ply-load').onclick = () => {
     controls.update();
     log(`Загружено ${path}`, 'ok');
   }, undefined, err => log(`Ошибка PLY: ${err}`, 'error'));
-};
+}

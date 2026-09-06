@@ -37,6 +37,7 @@ def save_config(cfg: dict):
 
 class CommandRequest(BaseModel):
     action: str   # start | next_view | reset | stop
+    payload: str = None
 
 
 class CADSelectRequest(BaseModel):
@@ -107,7 +108,7 @@ def create_app() -> FastAPI:
     @app.post("/command")
     async def command(req: CommandRequest):
         try:
-            await orch.handle_command(req.action)
+            await orch.handle_command(req.action, req.payload)
             return {"ok": True, "state": sm.state.value}
         except ValueError as e:
             raise HTTPException(400, str(e))

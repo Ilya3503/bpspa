@@ -30,8 +30,9 @@
       </section>
 
       <div class="buttons">
-        <button id="btn-start" class="primary">START</button>
-        <button id="btn-next">NEXT</button>
+        <button id="btn-start" class="primary">START (снять + обработать)</button>
+        <button id="btn-capture">Только снять</button>
+        <button id="btn-process">Обработать выбранное</button>
         <button id="btn-reset">RESET</button>
         <button id="btn-stop" class="danger">STOP</button>
       </div>
@@ -58,11 +59,17 @@
       </section>
 
       <section>
-        <h2>Вьювер</h2>
+        <h2>Сырые облака (data)</h2>
+        <select id="data-select"></select>
+        <button id="data-load">Открыть</button>
+      </section>
+
+      <section>
+        <h2>Результаты (annotated)</h2>
         <label><input type="checkbox" id="show-cad" checked> Показать CAD после ICP</label>
         <label>CAD прозрачность <input type="range" id="cad-opacity" min="0" max="1" step="0.05" value="0.9"></label>
-        <select id="ply-select"></select>
-        <button id="ply-load">Открыть PLY</button>
+        <select id="annot-select"></select>
+        <button id="annot-load">Открыть</button>
       </section>
 
       <section>

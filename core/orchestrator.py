@@ -43,7 +43,7 @@ class Orchestrator:
 
     # ---------------- публичный API ----------------
 
-    async def handle_command(self, action: str):
+    async def handle_command(self, action: str, payload: str = None):
         if action == "stop":
             self.sm.trigger("stop")
             await self._emit_state()
@@ -73,6 +73,20 @@ class Orchestrator:
             asyncio.create_task(self._run_two_view_cycle_second_half())
             return
 
+        if action == "capture_only":
+            if self._busy.locked():
+                await self.ws.broadcast({"event": "error", "message": "Уже идёт цикл"})
+                return
+            asyncio.create_task(self._run_capture_only())
+            return
+
+        if action == "process_file":
+            if self._busy.locked():
+                await self.ws.broadcast({"event": "error", "message": "Уже идёт цикл"})
+                return
+            asyncio.create_task(self._run_process_file(payload))
+            return
+
         raise ValueError(f"Неизвестная команда: {action}")
 
     # ---------------- циклы ----------------
@@ -96,6 +110,43 @@ class Orchestrator:
                 await self.ws.broadcast({"event": "done", "result_file": "results/position.json"})
             except Exception as e:
                 log.exception("Ошибка в _run_single_view_cycle")
+                self.sm.fail(str(e))
+                await self.ws.broadcast({"event": "error", "message": str(e)})
+                await self._emit_state()
+
+    async def _run_capture_only(self):
+        """Только снимок в data/, без обработки. IDLE → CAPTURING_SINGLE → IDLE."""
+        async with self._busy:
+            try:
+                self.sm.trigger_start(n_views=1)
+                await self._emit_state()
+                filepath = await self._step_capture(view=1, single_mode=True)
+                self.sm.trigger("stop")   # вернуться в IDLE
+                await self._emit_state()
+                await self.ws.broadcast({"event": "capture_only_done", "file": filepath})
+            except Exception as e:
+                log.exception("Ошибка в _run_capture_only")
+                self.sm.fail(str(e))
+                await self.ws.broadcast({"event": "error", "message": str(e)})
+                await self._emit_state()
+
+    async def _run_process_file(self, input_file: str):
+        """Обработка готового .ply из data/. IDLE → PROCESSING → DONE."""
+        async with self._busy:
+            try:
+                if not input_file:
+                    raise RuntimeError("Не указан файл для обработки")
+                self.sm.trigger_start(n_views=1)   # в CAPTURING_SINGLE
+                self.sm.advance(State.PROCESSING)
+                await self._emit_state()
+
+                result = await self._step_process(input_file)
+                self.sm.set_data(last_result=result)
+                self.sm.advance(State.DONE)
+                await self._emit_state()
+                await self.ws.broadcast({"event": "done", "result_file": "results/position.json"})
+            except Exception as e:
+                log.exception("Ошибка в _run_process_file")
                 self.sm.fail(str(e))
                 await self.ws.broadcast({"event": "error", "message": str(e)})
                 await self._emit_state()
