@@ -263,7 +263,6 @@ $('btn-process').onclick = () => {
   const path = dataSelect.value;   // выбранный сырой .ply из data (см. задачу 2)
   if (!path) { log('Выбери облако из data', 'error'); return; }
   sendCommand('process_file', path);};
-$('btn-next').onclick  = () => sendCommand('next_view');
 $('btn-reset').onclick = () => sendCommand('reset');
 $('btn-stop').onclick  = () => sendCommand('stop');
 
