@@ -34,6 +34,7 @@ class CADSelectRequest(BaseModel):
 class CameraSelectRequest(BaseModel):
     backend: str   # realsense | orbbec
 
+
 class ConfigApply(BaseModel):
     config: dict
 
