@@ -37,7 +37,7 @@ def save_config(cfg: dict):
 
 class CommandRequest(BaseModel):
     action: str   # start | next_view | reset | stop
-    payload: str = None
+    payload: Optional[str] = None
 
 
 class CADSelectRequest(BaseModel):
