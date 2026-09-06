@@ -11,6 +11,8 @@ const cadSelect = $('cad-select');
 const showCadCb = $('show-cad');
 const cadOpacity = $('cad-opacity');
 const btnCamera = $('btn-camera');
+const dataSelect = $('data-select');
+const annotSelect = $('annot-select');
 let cameraActive = null;
 const CAMERA_LABELS = { realsense: 'RealSense', orbbec: 'Orbbec' };
 
@@ -290,8 +292,6 @@ refreshCadList();
 
 // ---------- PLY-вьювер: открыть произвольный файл ----------
 // ---------- раздельные списки: сырые (data) и annotated (results) ----------
-const dataSelect = $('data-select');
-const annotSelect = $('annot-select');
 
 async function refreshDataList() {
   const r = await fetch('/files/data');
