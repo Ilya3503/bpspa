@@ -9,6 +9,7 @@
 import asyncio
 import base64
 import logging
+import time
 from pathlib import Path
 
 import cv2
@@ -200,7 +201,9 @@ class Orchestrator:
     async def _step_capture(self, view: int, single_mode: bool = False) -> str:
         await self.ws.broadcast({"event": "capture_start", "view": view, "single_mode": single_mode})
         loop = asyncio.get_event_loop()
+        _t = time.perf_counter()
         filepath = await loop.run_in_executor(None, self.camera.capture_pointcloud, "data")
+        log.info(f"[timing] capture={round(time.perf_counter() - _t, 3)}")
         if filepath is None:
             raise RuntimeError(f"Не удалось захватить view {view}")
         pcd = pl.load_pcd(filepath)
@@ -266,12 +269,15 @@ class Orchestrator:
         """Синхронный pipeline. emit — функция для рассылки событий."""
         cfg = self.config
         run_dir = self._make_run_dir()
+        t = {}  # тайминги этапов
+        t_all = time.perf_counter()
         pre = cfg["preprocessing"]
         plane = cfg["plane_removal"]
         db = cfg["dbscan"]
         icp_cfg = cfg["icp"]
         global_cfg = cfg.get("global_registration", {})
 
+        _t = time.perf_counter()
         pcd = pl.load_pcd(input_file)
         pcd = pl.clean_nan(pcd)
         n0 = len(pcd.points)
@@ -287,6 +293,7 @@ class Orchestrator:
         pcd = pl.voxel_downsample(pcd, pre["voxel_size"])
         emit({"event": "processing_step", "step": "voxel_downsample",
               "points_before": n, "points_after": len(pcd.points)})
+        scene_bg = pcd
 
         n = len(pcd.points)
         pcd = pl.statistical_filter(pcd, pre["nb_neighbors"], pre["std_ratio"])
@@ -304,7 +311,7 @@ class Orchestrator:
             )
             emit({"event": "processing_step", "step": "ransac_plane",
                   "points_before": n, "points_after": len(pcd.points)})
-
+        t["preprocessing"] = time.perf_counter() - _t
         # CAD модель — определяем заранее, нужно для обоих путей обработки
         cad_model = None
         cad_name = icp_cfg.get("cad_file")
@@ -320,6 +327,8 @@ class Orchestrator:
         if iter_cfg.get("enabled", False) and cad_name:
             return self._process_iterative(pcd, cad_name, icp_cfg, global_cfg, iter_cfg, emit, plane_model, input_file)
 
+
+        t["detection"] = time.perf_counter() - _t
         clusters = pl.cluster_dbscan(
             pcd,
             eps=db["eps"],
@@ -336,6 +345,7 @@ class Orchestrator:
         Path(run_dir, "clusters").mkdir(parents=True, exist_ok=True)
         pl.save_clusters(clusters, str(Path(run_dir, "clusters")))
 
+        t["pose"] = time.perf_counter() - _t
         clusters_info = []
         for i, cluster in enumerate(clusters):
             info = pl.cluster_info(cluster, i)
@@ -387,9 +397,16 @@ class Orchestrator:
             "clusters": clusters_info,
             "plane_model": plane_model,
         }
+        _t = time.perf_counter()
         if clusters:
-            result["annotated_ply"] = pl.make_annotated_ply(pcd, clusters, run_dir)
+            result["annotated_ply"] = pl.make_annotated_ply(pcd, scene_bg, clusters, run_dir)
         pl.save_position_json(result, run_dir)
+        t["save"] = time.perf_counter() - _t
+        t["total_process"] = time.perf_counter() - t_all
+
+        t = {k: round(v, 3) for k, v in t.items()}
+        result["timing"] = t
+        log.info(f"[timing] " + " ".join(f"{k}={v}" for k, v in t.items()))
         self._finalize_run_dir(run_dir, len(clusters))
         return result
 

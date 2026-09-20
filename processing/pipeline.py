@@ -810,18 +810,30 @@ def make_iterative_annotated_ply(scene_pcd, poses, cad_model, results_dir: str) 
     o3d.io.write_point_cloud(str(out), m)
     return str(out)
 
-def make_annotated_ply(pcd, clusters, results_dir: str) -> str:
+def make_annotated_ply(pcd, scene_bg, clusters, results_dir: str) -> str:
+    """Annotated: вся сцена серым фоном + кластеры цветом поверх.
+    scene_bg — прорежённое облако сцены (контекст), clusters — выделенные объекты."""
     out = Path(results_dir) / "annotated_pointcloud.ply"
-    if not clusters:
-        o3d.io.write_point_cloud(str(out), pcd)
-        return str(out)
-    cmap = plt.get_cmap("tab10")(np.linspace(0, 1, 10))[:, :3]
     all_p, all_c = [], []
+
+    # 1) фон — вся сцена серым
+    bg_pts = np.asarray(scene_bg.points)
+    if len(bg_pts) > 0:
+        all_p.append(bg_pts)
+        all_c.append(np.tile([0.35, 0.35, 0.35], (len(bg_pts), 1)))
+
+    # 2) кластеры — цветом поверх
+    cmap = plt.get_cmap("tab10")(np.linspace(0, 1, 10))[:, :3]
     for i, c in enumerate(clusters):
         pts = np.asarray(c.points)
         clr = np.tile(cmap[i % len(cmap)], (pts.shape[0], 1))
         all_p.append(pts)
         all_c.append(clr)
+
+    if not all_p:
+        o3d.io.write_point_cloud(str(out), pcd)
+        return str(out)
+
     m = o3d.geometry.PointCloud()
     m.points = o3d.utility.Vector3dVector(np.vstack(all_p))
     m.colors = o3d.utility.Vector3dVector(np.vstack(all_c))
