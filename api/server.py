@@ -1,36 +1,21 @@
-"""
-FastAPI сервер: эндпоинты + WebSocket.
-"""
 import asyncio
 import json
 import logging
 from pathlib import Path
 from typing import Optional
 
-import yaml
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from core import config_store
 from core.state_machine import StateMachine
 from core.orchestrator import Orchestrator
 from hardware.camera_switch import CameraSwitch
 from api.ws_manager import WSManager
 
 log = logging.getLogger(__name__)
-
-CONFIG_PATH = Path("config.yaml")
-
-
-def load_config() -> dict:
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def save_config(cfg: dict):
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
 
 
 # ---------- модели ----------
@@ -46,11 +31,17 @@ class CADSelectRequest(BaseModel):
 class CameraSelectRequest(BaseModel):
     backend: str   # realsense | orbbec
 
+class ConfigApply(BaseModel):
+    config: dict
+
+class Snapshot(BaseModel):
+    config: dict
+    note: str = ""
 
 # ---------- сборка приложения ----------
 
 def create_app() -> FastAPI:
-    config = load_config()
+    config = config_store.load_effective()
 
     app = FastAPI(title="Bin-Picking System", version="1.0")
 
@@ -156,27 +147,47 @@ def create_app() -> FastAPI:
         if not d.exists():
             raise HTTPException(404, f"Модель не найдена: {req.name}")
         app.state.config["icp"]["cad_file"] = req.name
-        save_config(app.state.config)
+        config_store.save_effective(app.state.config)
         await ws_manager.broadcast({"event": "cad_selected", "name": req.name})
         return {"ok": True, "selected": req.name}
 
-    @app.get("/config")
-    async def config_get():
+
+
+    @app.get("/config_ui", response_class=HTMLResponse)
+    async def config_ui():
+        f = ui_dir / "config.html"
+        if not f.exists():
+            raise HTTPException(404, "ui/config.html не найден")
+        return FileResponse(str(f))
+
+    @app.get("/config/effective")
+    async def config_effective():
         return app.state.config
 
-    @app.post("/config")
-    async def config_set(patch: dict = Body(...)):
-        # неглубокий merge
-        def deep_update(d, u):
-            for k, v in u.items():
-                if isinstance(v, dict) and isinstance(d.get(k), dict):
-                    deep_update(d[k], v)
-                else:
-                    d[k] = v
-            return d
-        deep_update(app.state.config, patch)
-        save_config(app.state.config)
-        return app.state.config
+    @app.post("/config/apply")
+    async def config_apply(req: ConfigApply):
+        config_store.save_effective(req.config)
+        app.state.config.clear()
+        app.state.config.update(req.config)  # живой конфиг обновлён на месте
+        await ws_manager.broadcast({"event": "config_changed"})
+        return {"ok": True}
+
+    @app.post("/config/reset")
+    async def config_reset():
+        config_store.reset_local()
+        new_cfg = config_store.load_effective()
+        app.state.config.clear()
+        app.state.config.update(new_cfg)
+        await ws_manager.broadcast({"event": "config_changed"})
+        return {"ok": True, "config": new_cfg}
+
+    @app.post("/config/snapshot")
+    async def config_snapshot(req: Snapshot):
+        name, body = config_store.snapshot_bytes(req.config, req.note)
+        return Response(
+            content=body, media_type="application/x-yaml",
+            headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
 
     @app.get("/files/{folder}")
     async def list_files(folder: str):

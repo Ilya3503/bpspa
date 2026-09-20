@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Конфиг · Bin-Picking</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c1f26; --panel2: #232734;
+    --line: #2c313d; --fg: #e6e8ec; --muted: #9aa2b1;
+    --accent: #4c8bf5; --accent2: #3aa06b; --danger: #c9524f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 5;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+    padding: 12px 18px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .sp { flex: 1; }
+  #status { color: var(--muted); font-size: 13px; }
+  main { max-width: 900px; margin: 0 auto; padding: 18px; }
+  .section {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; margin-bottom: 14px; overflow: hidden;
+  }
+  .section > h2 {
+    margin: 0; padding: 11px 15px; font-size: 14px; font-weight: 600;
+    background: var(--panel2); border-bottom: 1px solid var(--line);
+    letter-spacing: .02em;
+  }
+  .rows { padding: 6px 15px 12px; }
+  .row {
+    display: grid; grid-template-columns: 220px 1fr auto;
+    align-items: center; gap: 12px; padding: 8px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .row:last-child { border-bottom: none; }
+  .row label { color: var(--fg); font-size: 13px; }
+  .row .hint { color: var(--muted); font-size: 11px; display: block; }
+  .row input[type=range] { width: 100%; accent-color: var(--accent); }
+  .row .val {
+    min-width: 66px; text-align: right; font-variant-numeric: tabular-nums;
+    color: var(--accent); font-weight: 600;
+  }
+  .row input[type=number] {
+    width: 92px; background: var(--panel2); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pair { display: flex; gap: 8px; align-items: center; }
+  .pair span { color: var(--muted); font-size: 12px; }
+  .toggle {
+    position: relative; width: 42px; height: 24px; flex: none;
+    background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 999px; cursor: pointer; transition: background .15s;
+  }
+  .toggle.on { background: var(--accent2); border-color: var(--accent2); }
+  .toggle::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 18px; height: 18px; border-radius: 50%; background: #fff;
+    transition: left .15s;
+  }
+  .toggle.on::after { left: 20px; }
+  button {
+    font: inherit; border: 1px solid var(--line); background: var(--panel2);
+    color: var(--fg); padding: 8px 14px; border-radius: 8px; cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { background: transparent; border-color: var(--danger); color: var(--danger); }
+  button:disabled { opacity: .5; cursor: default; }
+  .snap { display: flex; align-items: center; gap: 8px; }
+  .snap input {
+    background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 10px; width: 160px;
+  }
+  .toast {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: var(--panel2); border: 1px solid var(--line); color: var(--fg);
+    padding: 10px 16px; border-radius: 8px; opacity: 0; pointer-events: none;
+    transition: opacity .2s; z-index: 20;
+  }
+  .toast.show { opacity: 1; }
+  .toast.err { border-color: var(--danger); color: #f2b6b4; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Конфиг</h1>
+  <span id="status">загрузка…</span>
+  <span class="sp"></span>
+  <div class="snap">
+    <input id="note" type="text" placeholder="пометка снимка" maxlength="40">
+    <button id="btn-snap">Скачать снимок</button>
+  </div>
+  <button id="btn-reset" class="danger">Сброс к default</button>
+  <button id="btn-apply" class="primary">Применить</button>
+</header>
+<main id="root"></main>
+<div id="toast" class="toast"></div>
+<script src="/static/config.js"></script>
+</body>
+</html>
