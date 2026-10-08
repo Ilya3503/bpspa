@@ -402,12 +402,12 @@ class Orchestrator:
         _t = time.perf_counter()
         if clusters:
             result["annotated_ply"] = pl.make_annotated_ply(pcd, scene_bg, clusters, run_dir)
-        pl.save_position_json(result, run_dir)
-        t["save"] = time.perf_counter() - _t
-        t["total_process"] = time.perf_counter() - t_all
+        t["save"] = round(time.perf_counter() - _t, 3)
+        t["total_process"] = round(time.perf_counter() - t_all, 3)
 
         t = {k: round(v, 3) for k, v in t.items()}
         result["timing"] = t
+        pl.save_position_json(result, run_dir)  # ← запись ПОСЛЕ добавления timing
         log.info(f"[timing] " + " ".join(f"{k}={v}" for k, v in t.items()))
         self._finalize_run_dir(run_dir, len(clusters))
         return result
