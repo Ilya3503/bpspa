@@ -328,7 +328,7 @@ class Orchestrator:
             return self._process_iterative(pcd, cad_name, icp_cfg, global_cfg, iter_cfg, emit, plane_model, input_file)
 
 
-        t["detection"] = time.perf_counter() - _t
+        _t = time.perf_counter()
         clusters = pl.cluster_dbscan(
             pcd,
             eps=db["eps"],
@@ -344,8 +344,9 @@ class Orchestrator:
 
         Path(run_dir, "clusters").mkdir(parents=True, exist_ok=True)
         pl.save_clusters(clusters, str(Path(run_dir, "clusters")))
+        t["detection"] = time.perf_counter() - _t
 
-        t["pose"] = time.perf_counter() - _t
+        _t = time.perf_counter()
         clusters_info = []
         for i, cluster in enumerate(clusters):
             info = pl.cluster_info(cluster, i)
@@ -390,6 +391,7 @@ class Orchestrator:
             info["pose"] = {k: v for k, v in pose.items() if k != "cad_points_transformed"}
             clusters_info.append(info)
 
+        t["pose"] = time.perf_counter() - _t
         result = {
             "status": "ok",
             "input_file": input_file,
