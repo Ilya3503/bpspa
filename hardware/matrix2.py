@@ -87,3 +87,64 @@ def estimate(image, detector, K, distortion):
     T[:3, 3] = t_cam_to_table
     return T, rmse, residual
 
+def main():
+    pipeline = rs.pipeline()
+    config = rs.config()
+    config.enable_stream(rs.stream.color, WIDTH, HEIGHT, rs.format.bgr8, FPS)
+    detector = aruco_detector()
+    print("Ожидание 4 маркеров (ID: 0, 1, 2, 3)...")
+    profile = None
+    try:
+        profile = pipeline.start(config)
+        K, distortion = get_intrinsics(profile)
+        print(f"RGB intrinsics: fx={K[0,0]:.2f}, fy={K[1,1]:.2f} px")
+        samples = []
+        frames_seen = 0
+        while len(samples) < SAMPLES and frames_seen < 600:
+            frames_seen += 1
+            color_frame = pipeline.wait_for_frames().get_color_frame()
+            if not color_frame:
+                continue
+            image = np.asanyarray(color_frame.get_data())
+            result = estimate(image, detector, K, distortion)
+            if result is not None:
+                samples.append(result)
+                print(f"Принято кадров: {len(samples)}/{SAMPLES}; RMSE={result[1]:.2f} px", end="\r", flush=True)
+        print()
+        if len(samples) != SAMPLES:
+            raise RuntimeError("Недостаточно корректных кадров. Проверьте видимость, ID и геометрию маркеров.")
+
+        # Используем кадр с минимальной ошибкой репроекции.
+        # Не усредняем элементы матриц поворота непосредственно.
+        best_T, best_rmse, best_residual = min(samples, key=lambda x: x[1])
+        print("Калибровка рассчитана, но ещё не подтверждена физическими измерениями.")
+        print("T_camera_to_table [м]:\n", best_T)
+        print("Положение камеры в СК стола [мм]:", np.round(best_T[:3, 3] * 1000, 2))
+        print("RMSE [px]:", round(best_rmse, 3))
+        print("Отклонения четырёх центров [px]:", np.round(best_residual, 3))
+
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+        output_path = OUT_DIR / "transform_cam_to_world.npy"
+        np.save(output_path, best_T)
+        np.save(OUT_DIR / "camera_matrix.npy", K)
+        np.save(OUT_DIR / "dist_coeffs.npy", distortion)
+        report = {
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "units": "meters",
+            "coordinate_frame": "table_origin_at_marker_rectangle_center",
+            "camera_frame": "RealSense_COLOR_optical_frame",
+            "frame_count": len(samples),
+            "reprojection_rmse_px": best_rmse,
+            "marker_center_residuals_px": best_residual.tolist(),
+            "camera_position_table_m": best_T[:3, 3].tolist(),
+        }
+        (OUT_DIR / "calibration_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print("Сохранено:", output_path)
+        print("Рабочая матрица hardware/transform_cam_to_world.npy НЕ изменена.")
+    finally:
+        if profile is not None:
+            pipeline.stop()
+
+
+if __name__ == "__main__":
+    main()
